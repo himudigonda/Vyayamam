@@ -1,0 +1,20 @@
+# FastAPI & Server
+fastapi
+uvicorn[standard]
+
+# WhatsApp Messaging via Twilio
+twilio
+
+# MongoDB Driver
+pymongo
+
+# Environment Variable Management
+python-dotenv
+
+# Data Analytics & Dashboard
+streamlit
+pandas
+plotly # For advanced charts in Streamlit
+
+# Local LLM Communication
+requests
