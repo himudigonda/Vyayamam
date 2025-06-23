@@ -22,3 +22,5 @@ plotly
 
 # Local LLM Communication
 requests
+
+loguru

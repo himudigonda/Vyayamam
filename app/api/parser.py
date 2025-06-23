@@ -1,44 +1,38 @@
 # app/api/parser.py
-
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from app.db.operations import find_exercise_in_plan
 from app.core.models import SetLog
+from app.core.logging_config import log
 
-# Regex to capture exercise logs. It's designed to be flexible.
-# It looks for patterns like: {exercise name} {weight} {reps} {optional: rpe #} {optional: notes ...}
 LOG_PATTERN = re.compile(
-    r"^(?P<exercise_name>.+?)\s+(?P<weight>\d+\.?\d*)\s+(?P<reps>\d+)"
-    r"(\s+rpe\s+(?P<rpe>\d+))?(\s+notes\s+(?P<notes>.+))?$",
+    r"^(?P<exercise_name>.+?)\s+(?P<weight>\d+\.?\d*)\s+(?P<reps>\d+)(\s+rpe\s+(?P<rpe>\d+))?(\s+notes\s+(?P<notes>.+))?$",
     re.IGNORECASE,
 )
 
 
 async def parse_message(message: str) -> Dict[str, Any] | None:
-    """
-    Parses the user's incoming message to determine the intent and extract entities.
-    """
     message = message.strip()
+    log.info(f"🧠 PARSING: Received message for parsing: '{message}'")
 
-    # --- Check for Commands First ---
     if message.lower() in ["next", "what's next?", "next exercise"]:
+        log.info("✅ SUCCESS: Parsed command 'get_next_exercise'.")
         return {"command": "get_next_exercise"}
     if message.lower() in ["done", "end workout"]:
+        log.info("✅ SUCCESS: Parsed command 'end_workout'.")
         return {"command": "end_workout"}
-    # Add more commands here like /status, /sleep, etc.
 
-    # --- Attempt to Parse as a Workout Log ---
     match = LOG_PATTERN.match(message)
     if not match:
-        return None  # Could not parse as a command or a log
+        log.warning("Message does not match command or log pattern.")
+        return None
 
     data = match.groupdict()
     exercise_query = data["exercise_name"].strip()
 
-    # The parser collaborates with the database to identify the exercise
     exercise_definition = await find_exercise_in_plan(exercise_query)
-
     if not exercise_definition:
+        log.error(f"❌ ERROR: Exercise not found in plan for query '{exercise_query}'.")
         return {"error": "exercise_not_found", "query": exercise_query}
 
     try:
@@ -48,13 +42,14 @@ async def parse_message(message: str) -> Dict[str, Any] | None:
             rpe=int(data["rpe"]) if data["rpe"] else None,
             notes=data["notes"].strip() if data["notes"] else None,
         )
-    except (ValueError, TypeError):
+        log.info(f"✅ SUCCESS: Parsed set log for '{exercise_definition['name']}'.")
+        return {
+            "command": "log_set",
+            "exercise_name": exercise_definition["name"],
+            "exercise_id": exercise_definition["_id"],
+            "set_log": set_log,
+            "target_sets": exercise_definition["target_sets"],
+        }
+    except (ValueError, TypeError) as e:
+        log.error(f"❌ ERROR: Invalid data format for set log. Details: {e}")
         return {"error": "invalid_data_format"}
-
-    return {
-        "command": "log_set",
-        "exercise_name": exercise_definition["name"],
-        "exercise_id": exercise_definition["_id"],
-        "set_log": set_log,
-        "target_sets": exercise_definition["target_sets"],
-    }

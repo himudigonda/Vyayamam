@@ -1,7 +1,7 @@
 # app/db/database.py
-
 from motor.motor_asyncio import AsyncIOMotorClient
 from app.core.config import settings
+from app.core.logging_config import log
 
 
 class DataBase:
@@ -11,31 +11,26 @@ class DataBase:
 db = DataBase()
 
 
-async def get_database_client() -> AsyncIOMotorClient:
-    """Returns the database client instance."""
-    return db.client
-
-
 async def connect_to_mongo():
-    """Connects to the MongoDB database."""
-    print("Connecting to MongoDB...")
-    # We use motor for asyncio support, which is ideal for FastAPI
-    db.client = AsyncIOMotorClient(settings.MONGO_URI)
-    print("✅ MongoDB connection successful.")
+    log.info("💾 DATABASE: Attempting to connect to MongoDB...")
+    try:
+        db.client = AsyncIOMotorClient(
+            settings.MONGO_URI, serverSelectionTimeoutMS=5000
+        )
+        await db.client.server_info()  # Tries to connect and raises an exception on failure
+        log.info("✅ SUCCESS: MongoDB connection established.")
+    except Exception as e:
+        log.error(f"❌ ERROR: Could not connect to MongoDB. Details: {e}")
+        raise
 
 
 async def close_mongo_connection():
-    """Closes the MongoDB connection."""
-    print("Closing MongoDB connection...")
+    log.info("💾 DATABASE: Closing MongoDB connection.")
     db.client.close()
-    print("✅ MongoDB connection closed.")
 
 
 def get_db():
-    """
-    A convenience function to get the database instance from the client.
-    This will be used by our CRUD operations.
-    """
     if db.client is None:
-        raise Exception("Database client not initialized. Call connect_to_mongo first.")
+        log.error("❌ ERROR: Database client not initialized.")
+        raise Exception("Database client not initialized.")
     return db.client[settings.DB_NAME]
