@@ -160,6 +160,34 @@ async def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
             response_message = ai_response
     elif parsed_data["command"] == "ping":
         response_message = "🏓 Pong! The entire pipeline is alive and kicking.\n\nIf this were a real ping, you'd have just lost a life. 😜"
+    elif parsed_data["command"] == "get_help":
+        response_message = (
+            "🤖 *Welcome to Vyayamam AI!* Here's what you can do:\n\n"
+            "1️⃣ *Log a Workout Set*\n"
+            "Use the format: `exercise weight reps`\n"
+            "_Example:_\n`smith incline 120 8`\n\n"
+            "You can also add optional notes or RPE:\n"
+            "`leg press 300 10 rpe 8`\n"
+            "`db rows 50 12 notes felt strong`\n\n"
+            "2️⃣ *Get Workout Guidance*\n"
+            "Type `next` to see your next planned exercise, including your last performance and PR.\n\n"
+            "3️⃣ *Manage Your Session*\n"
+            "• `/start` - Officially begin your workout session.\n"
+            "• `/end` - Finish your session to get a grade and an AI-powered summary.\n\n"
+            "4️⃣ *Log Daily Readiness*\n"
+            "• `/sleep [hours]` - _e.g., /sleep 7.5_\n"
+            "• `/stress [1-10]` - _e.g., /stress 3_\n"
+            "• `/soreness [area]` - _e.g., /soreness back_\n\n"
+            "5️⃣ *Chat with Your AI Coach*\n"
+            "Use `/ask` followed by your question.\n"
+            "_Examples:_\n"
+            "`/ask how is my squat progressing?`\n"
+            "`/ask what should I focus on for my chest?`\n\n"
+            "6️⃣ *Check System Status*\n"
+            "Type `/ping` to see if the system is online.\n\n"
+            "7️⃣ *View Your Dashboard*\n"
+            "Don't forget to check the web dashboard for detailed charts and trends!"
+        )
     else:
         response_message = f"✅ Command '{parsed_data['command']}' received. This feature is coming soon!"
     
