@@ -11,14 +11,14 @@ async def lifespan(app: FastAPI):
     log.info("🚀 LAUNCH: Starting Vyayamam application...")
     await connect_to_mongo()
     yield
-    log.info("🛑 SHUTDOWN: Closing resources...")
+    log.info("🛑 SHUTDOWN: Closing application resources...")
     await close_mongo_connection()
     log.info("🛑 SHUTDOWN: Application terminated gracefully.")
 
 
 app = FastAPI(
     title="Vyayamam AI Coach",
-    version="1.0.0",
+    version="3.5.1",  # Incremented version
     lifespan=lifespan,
     default_response_class=Response(media_type="application/xml"),
 )
@@ -28,8 +28,8 @@ app.include_router(whatsapp_router, prefix="/api")
 
 @app.get("/", tags=["Root"], response_class=Response)
 async def read_root():
-    log.info("Received a GET request to the root endpoint.")
+    log.info("➡️  Received GET request to root endpoint.")
     return Response(
-        content='{"message": "Welcome to the Vyayamam AI Coach API!"}',
+        content='{"message": "Welcome to the Vyayamam AI Coach API v3.5.1!"}',
         media_type="application/json",
     )

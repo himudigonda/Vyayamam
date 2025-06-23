@@ -1,5 +1,4 @@
 # app/db/operations.py
-import re
 from datetime import date, timedelta, datetime
 from app.db.database import get_db
 from app.core.models import DailyLog, SetLog, WorkoutSession, CompletedExercise, PyObjectId
@@ -11,58 +10,60 @@ from typing import Any, Dict
 async def get_or_create_daily_log(user_id: str) -> DailyLog:
     db = get_db()
     today_str = date.today().strftime("%Y-%m-%d")
-    log.info(
-        f"💾 DATABASE: Searching for daily log for user '{user_id}' on date '{today_str}'."
-    )
+    log.info(f"💾 DB: Searching for daily log for user '{user_id}' on date '{today_str}'.")
 
     log_data = await db.daily_logs.find_one({"user_id": user_id, "date": today_str})
 
     if log_data:
-        log.info("✅ SUCCESS: Found existing daily log.")
+        log.info("✅ 💾 DB: Found existing daily log.")
         return DailyLog(**log_data)
     else:
-        log.warning(f"Log not found. Creating a new daily log for user '{user_id}'.")
+        log.warning(f"💾 DB: Log not found. Creating a new daily log for user '{user_id}'.")
         new_log = DailyLog(user_id=user_id, date=today_str)
         await db.daily_logs.insert_one(new_log.model_dump(by_alias=True))
-        log.info("✅ SUCCESS: New daily log created.")
+        log.info("✅ 💾 DB: New daily log created.")
         return new_log
 
 
-# --- REPLACE THE `find_exercise_in_plan` FUNCTION WITH THIS NEW VERSION ---
+# --- REPLACE the existing `find_exercise_in_plan` function with this new, more flexible version ---
 async def find_exercise_in_plan(exercise_query: str) -> Dict[str, Any] | None:
     """
-    Finds the best matching exercise from the plan using fuzzy string matching.
+    Finds the best matching exercise from ALL plans using fuzzy string matching,
+    making the logger flexible for any day.
     """
     db = get_db()
-    today_weekday = date.today().weekday() + 1
-    log.info(f"🧠 FUZZY SEARCH: Searching for exercise matching '{exercise_query}' for today (weekday {today_weekday}).")
+    log.info(f"💾 FUZZY SEARCH: Searching for '{exercise_query}' across ALL plans.")
     
-    plan = await db.workout_definitions.find_one({"day_of_week": today_weekday})
+    # --- THE FIX: Instead of finding one plan, find ALL plans ---
+    plans_cursor = db.workout_definitions.find({})
+    all_plans = await plans_cursor.to_list(length=10) # 10 is plenty for our 7-day plans
     
-    if not plan or not plan.get("exercises"):
-        log.warning(f"No workout plan found for today, so no exercises to match against.")
+    if not all_plans:
+        log.warning(f"💾 FUZZY SEARCH: No workout definitions found in the database at all.")
         return None
 
-    # Create a list of all possible names and aliases to search against
+    # Create a list of all possible names and aliases from every plan
     choices = {}
-    for exercise in plan["exercises"]:
-        # The official name is a choice
-        choices[exercise["name"]] = exercise
-        # All aliases are also choices
-        for alias in exercise.get("aliases", []):
-            choices[alias] = exercise
-            
-    # Use process.extractOne to find the best match
+    for plan in all_plans:
+        for exercise in plan.get("exercises", []):
+            # The official name is a choice
+            choices[exercise["name"]] = exercise
+            # All aliases are also choices
+            for alias in exercise.get("aliases", []):
+                choices[alias] = exercise
+                
+    # Use process.extractOne to find the best match from the master list
     best_match = process.extractOne(exercise_query, choices.keys())
     
-    if best_match and best_match[1] >= 80:  # Using a confidence score of 80
+    # We can be slightly more confident now that we're searching everything.
+    if best_match and best_match[1] >= 85:
         found_string = best_match[0]
         score = best_match[1]
         matched_exercise = choices[found_string]
-        log.info(f"✅ SUCCESS: Fuzzy match found! '{exercise_query}' -> '{matched_exercise['name']}' with score {score}.")
+        log.info(f"✅ 💾 FUZZY SEARCH: Match found! '{exercise_query}' -> '{matched_exercise['name']}' with score {score}.")
         return matched_exercise
     
-    log.warning(f"❌ No confident exercise match found for '{exercise_query}'. Best guess was '{best_match[0]}' with score {best_match[1]}'.")
+    log.warning(f"❌ 💾 FUZZY SEARCH: No confident match for '{exercise_query}'. Best guess: '{best_match[0]}' (Score: {best_match[1]}).")
     return None
 
 
@@ -285,7 +286,8 @@ async def log_readiness(user_id: str, metric: str, value: Any):
     db = get_db()
     today_str = date.today().strftime("%Y-%m-%d")
     log.info(f"\U0001F4BE DATABASE: Logging readiness metric '{metric}' with value '{value}' for user '{user_id}'.")
-    
+
+
     # Ensure the daily log exists
     await get_or_create_daily_log(user_id)
     
