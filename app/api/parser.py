@@ -32,6 +32,15 @@ async def parse_message(message: str) -> Dict[str, Any] | None:
         log.info(f"✅ SUCCESS: Parsed command 'ask_ai' with question: '{question}'.")
         return {"command": "ask_ai", "question": question}
 
+    # --- NEW: Check for workout state commands ---
+    if message.lower() in ["/start workout", "/start"]:
+        log.info("✅ SUCCESS: Parsed command 'start_workout'.")
+        return {"command": "start_workout"}
+
+    if message.lower() in ["/end workout", "/done", "/end"]:
+        log.info("✅ SUCCESS: Parsed command 'end_workout'.")
+        return {"command": "end_workout"}
+
     # --- NEW: Check for readiness commands ---
     sleep_match = SLEEP_PATTERN.match(message)
     if sleep_match:

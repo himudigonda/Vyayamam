@@ -1,6 +1,6 @@
 # app/db/operations.py
 import re
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from app.db.database import get_db
 from app.core.models import DailyLog, SetLog, WorkoutSession, CompletedExercise, PyObjectId
 from app.core.logging_config import log
@@ -272,3 +272,49 @@ async def log_readiness(user_id: str, metric: str, value: Any):
         log.info("✅ SUCCESS: Readiness data updated in the daily log.")
     else:
         log.warning("Could not update readiness data. The daily log might not exist or the value is the same.")
+
+async def update_workout_status(user_id: str, status: str) -> dict:
+    """
+    Updates the status of a workout session (e.g., starts or completes it).
+    """
+    db = get_db()
+    today_str = date.today().strftime("%Y-%m-%d")
+    log.info(f"💾 DATABASE: Updating workout status to '{status}' for user '{user_id}'.")
+    
+    # Ensure the daily log exists
+    daily_log = await get_or_create_daily_log(user_id)
+    
+    if status == "started":
+        # If a session already exists, do nothing but confirm. Otherwise, create it.
+        if daily_log.workout_session:
+            log.info("Workout session already in progress.")
+            return {"status": "success", "message": "Workout already in progress."}
+        
+        update_op = {"$set": {"workout_session": WorkoutSession().model_dump()}}
+        result = await db.daily_logs.update_one(
+            {"user_id": user_id, "date": today_str}, update_op
+        )
+        if result.modified_count > 0:
+            return {"status": "success", "message": "Workout started."}
+
+    elif status == "completed":
+        # Can only complete a session that exists
+        if not daily_log.workout_session:
+            return {"status": "error", "message": "No workout in progress to end."}
+            
+        update_op = {
+            "$set": {
+                "workout_session.status": "completed",
+                "workout_session.end_time": datetime.utcnow(),
+            }
+        }
+        result = await db.daily_logs.update_one(
+            {"user_id": user_id, "date": today_str}, update_op
+        )
+        if result.modified_count > 0:
+            return {"status": "success", "message": "Workout completed."}
+        else:
+            # This might happen if user types /end twice
+            return {"status": "success", "message": "Workout was already marked as complete."}
+
+    return {"status": "error", "message": "Invalid status update."}

@@ -2,7 +2,13 @@
 from fastapi import APIRouter, Form, Response
 from twilio.twiml.messaging_response import MessagingResponse
 from app.api.parser import parse_message
-from app.db.operations import log_set, get_or_create_daily_log, get_next_exercise_details, log_readiness
+from app.db.operations import (
+    log_set, 
+    get_or_create_daily_log, 
+    get_next_exercise_details, 
+    log_readiness, 
+    update_workout_status # Add this
+)
 from app.core.logging_config import log
 from app.api.ai_coach import get_ai_response
 
@@ -104,6 +110,22 @@ async def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
         elif metric == "soreness":
             response_message = f"✅ Soreness in '{value}' logged. Make sure to stretch and recover! 💪"
     # --- END OF NEW BLOCK ---
+
+    # --- NEW: Handle workout state management ---
+    elif parsed_data["command"] == "start_workout":
+        result = await update_workout_status(user_id=user_phone_number, status="started")
+        if result["status"] == "success":
+            response_message = "🔥 Workout started! Let's get to it. Your first exercise is waiting. Type `next` to see it."
+        else:
+            response_message = f"🤔 Hmm, {result['message']}"
+
+    elif parsed_data["command"] == "end_workout":
+        result = await update_workout_status(user_id=user_phone_number, status="completed")
+        if result["status"] == "success":
+            response_message = "🎉 Workout complete! Great job today. Session has been logged. Time to rest and recover. 💪"
+        else:
+            response_message = f"🤔 Hmm, {result['message']}"
+    # --- END OF NEW BLOCKS ---
 
     elif parsed_data["command"] == "log_set":
         num_sets_done = await log_set(user_id=user_phone_number, exercise_name=parsed_data["exercise_name"], exercise_id=parsed_data["exercise_id"], set_log=parsed_data["set_log"])
