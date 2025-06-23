@@ -15,6 +15,19 @@ async def parse_message(message: str) -> Dict[str, Any] | None:
     message = message.strip()
     log.info(f"🧠 PARSING: Received message for parsing: '{message}'")
 
+    # --- Check for Commands First ---
+    # NEW: Check for /ping command
+    if message.lower().startswith("/ping"):
+        log.info("✅ SUCCESS: Parsed command 'ping'.")
+        return {"command": "ping"}
+    # NEW: Check for /ask command
+    if message.lower().startswith("/ask"):
+        question = message[5:].strip()  # Get everything after "/ask "
+        if not question:
+            return {"error": "empty_question"}
+        log.info(f"✅ SUCCESS: Parsed command 'ask_ai' with question: '{question}'.")
+        return {"command": "ask_ai", "question": question}
+
     if message.lower() in ["next", "what's next?", "next exercise"]:
         log.info("✅ SUCCESS: Parsed command 'get_next_exercise'.")
         return {"command": "get_next_exercise"}

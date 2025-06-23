@@ -64,27 +64,34 @@ def load_data(_client):
 # --- Ollama Integration ---
 def get_ollama_insight(data_json: str):
     """Sends workout data to local Ollama for analysis."""
-    prompt = f"""
+    system_prompt = f"""
     You are Astra, an expert AI strength and conditioning coach. Your user, Himansh, has been logging his workouts.
     Analyze the following JSON data which represents his recent performance.
-    
     Your task is to provide ONE SINGLE, actionable, and encouraging insight based on the data. 
     Focus on trends, potential plateaus, or areas of exceptional progress. Be specific. Do not be generic.
-
     Today's Date: {datetime.now().strftime('%Y-%m-%d')}
-    Workout Data:
-    {data_json}
-
-    Provide your insight as a short, clear paragraph.
     """
+
+    user_prompt = f"Here is my recent workout data in JSON format:\n{data_json}"
+
     try:
+        # THE FIX: Use the /api/chat endpoint and the corrected payload structure
         response = requests.post(
-            "http://localhost:11434/api/generate",
-            json={"model": "gemma3:1b", "prompt": prompt, "stream": False},
-            timeout=60,  # Add a timeout
+            "http://localhost:11434/api/chat",
+            json={
+                "model": "gemma3:latest",  # Use a model you have installed
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "stream": False,
+            },
+            timeout=60,
         )
-        response.raise_for_status()  # Raise an exception for bad status codes
-        return json.loads(response.text)["response"]
+        response.raise_for_status()
+        response_data = json.loads(response.text)
+        return response_data.get("message", {}).get("content", "")
+
     except requests.exceptions.RequestException as e:
         return f"Error connecting to Ollama: {e}. Make sure the Ollama application is running."
 
