@@ -21,6 +21,10 @@ async def parse_message(message: str) -> Dict[str, Any] | None:
     log.info(f"\U0001F9E0 PARSING: Received message for parsing: '{message}'")
 
     # --- Check for Commands First ---
+    if message.lower() == "/list":
+        log.info("✅ SUCCESS: Parsed command 'list_exercises'.")
+        return {"command": "list_exercises"}
+        
     if message.lower() == "/help":
         log.info("✅ SUCCESS: Parsed command 'help'.")
         return {"command": "get_help"}

@@ -4,7 +4,8 @@ from datetime import date, timedelta, datetime
 from app.db.database import get_db
 from app.core.models import DailyLog, SetLog, WorkoutSession, CompletedExercise, PyObjectId
 from app.core.logging_config import log
-from typing import Any 
+from thefuzz import process
+from typing import Any, Dict
 
 
 async def get_or_create_daily_log(user_id: str) -> DailyLog:
@@ -27,37 +28,41 @@ async def get_or_create_daily_log(user_id: str) -> DailyLog:
         return new_log
 
 
-async def find_exercise_in_plan(exercise_query: str) -> dict | None:
+# --- REPLACE THE `find_exercise_in_plan` FUNCTION WITH THIS NEW VERSION ---
+async def find_exercise_in_plan(exercise_query: str) -> Dict[str, Any] | None:
+    """
+    Finds the best matching exercise from the plan using fuzzy string matching.
+    """
     db = get_db()
-    query_regex = re.compile(f"^{re.escape(exercise_query)}", re.IGNORECASE)
-    log.info(f"\U0001F4BE DATABASE: Searching for exercise matching query: '{exercise_query}'.")
-
-    plan = await db.workout_definitions.find_one(
-        {
-            "exercises": {
-                "$elemMatch": {"$or": [{"name": query_regex}, {"aliases": query_regex}]}
-            }
-        }
-    )
-
-    if not plan:
-        log.warning(f"No workout day found containing an exercise matching '{exercise_query}'.")
+    today_weekday = date.today().weekday() + 1
+    log.info(f"🧠 FUZZY SEARCH: Searching for exercise matching '{exercise_query}' for today (weekday {today_weekday}).")
+    
+    plan = await db.workout_definitions.find_one({"day_of_week": today_weekday})
+    
+    if not plan or not plan.get("exercises"):
+        log.warning(f"No workout plan found for today, so no exercises to match against.")
         return None
 
+    # Create a list of all possible names and aliases to search against
+    choices = {}
     for exercise in plan["exercises"]:
-        is_match = False
-        if re.match(query_regex, exercise["name"]):
-            is_match = True
-        else:
-            for alias in exercise.get("aliases", []):
-                if re.match(query_regex, alias):
-                    is_match = True
-                    break
-        if is_match:
-            log.info(f"✅ SUCCESS: Found exercise '{exercise['name']}' within day '{plan['day_name']}'.")
-            return exercise
-
-    log.warning(f"Exercise matching '{exercise_query}' not found in any plan (this should be rare).")
+        # The official name is a choice
+        choices[exercise["name"]] = exercise
+        # All aliases are also choices
+        for alias in exercise.get("aliases", []):
+            choices[alias] = exercise
+            
+    # Use process.extractOne to find the best match
+    best_match = process.extractOne(exercise_query, choices.keys())
+    
+    if best_match and best_match[1] >= 80:  # Using a confidence score of 80
+        found_string = best_match[0]
+        score = best_match[1]
+        matched_exercise = choices[found_string]
+        log.info(f"✅ SUCCESS: Fuzzy match found! '{exercise_query}' -> '{matched_exercise['name']}' with score {score}.")
+        return matched_exercise
+    
+    log.warning(f"❌ No confident exercise match found for '{exercise_query}'. Best guess was '{best_match[0]}' with score {best_match[1]}'.")
     return None
 
 
@@ -419,3 +424,21 @@ async def grade_and_summarize_session(user_id: str) -> dict:
     log.info("\u2705 SUCCESS: Session finalized in DB with grade and AI summary.")
 
     return {"status": "success", "grade": grade, "summary": ai_summary}
+
+# --- ADD THIS NEW FUNCTION ---
+async def get_todays_exercises() -> list[str]:
+    """
+    Retrieves a list of official exercise names for the current day's workout plan.
+    """
+    db = get_db()
+    today_weekday = date.today().weekday() + 1
+    log.info(f"💾 DATABASE: Fetching exercise list for weekday {today_weekday}.")
+    
+    plan = await db.workout_definitions.find_one({"day_of_week": today_weekday})
+    
+    if not plan or not plan.get("exercises"):
+        return []
+        
+    # Return a sorted list of the official names
+    exercise_names = sorted([ex["name"] for ex in plan["exercises"]], key=lambda name: [ex for ex in plan["exercises"] if ex["name"] == name][0]["order"])
+    return exercise_names
