@@ -5,7 +5,6 @@ import plotly.graph_objects as go
 from pymongo import MongoClient
 import os
 import sys
-from dotenv import load_dotenv
 import requests
 import json
 from datetime import datetime
@@ -31,39 +30,67 @@ def get_mongo_client():
     return client
 
 
+# --- MODIFIED: Enhanced data loading function for muscle groups ---
 @st.cache_data(ttl=600)  # Cache data for 10 minutes
 def load_data(_client):
-    """Loads all daily logs from the database."""
+    """Loads and flattens data, now including muscle group mappings."""
     db = _client[settings.DB_NAME]
+
+    # --- NEW: Fetch workout definitions to map exercises to muscle groups ---
+    plan_definitions = list(db.workout_definitions.find({}))
+    exercise_to_muscle_map = {}
+    for day_plan in plan_definitions:
+        for exercise in day_plan.get("exercises", []):
+            # We take the first primary muscle group for simplicity in this chart
+            if exercise.get("primary_muscle_groups"):
+                exercise_to_muscle_map[exercise["name"]] = exercise["primary_muscle_groups"][0]
+
     logs = list(db.daily_logs.find({}))
     if not logs:
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()  # Return two empty dataframes
 
-    # Flatten the nested data into a structured DataFrame
-    flat_data = []
+    workout_data = []
+    daily_data = []
     for log in logs:
-        if log.get("workout_session") and log["workout_session"].get(
-            "completed_exercises"
-        ):
+        log_date = pd.to_datetime(log["date"])
+        readiness = log.get("readiness", {})
+        daily_data.append({"date": log_date, "sleep_hours": readiness.get("sleep_hours"), "stress_level": readiness.get("stress_level")})
+
+        if log.get("workout_session") and log["workout_session"].get("completed_exercises"):
             for exercise in log["workout_session"]["completed_exercises"]:
                 for s_idx, set_data in enumerate(exercise["sets"]):
-                    flat_data.append(
-                        {
-                            "date": pd.to_datetime(log["date"]),
-                            "exercise_name": exercise["name"],
-                            "set_number": s_idx + 1,
-                            "weight": set_data["weight"],
-                            "reps": set_data["reps"],
-                            "rpe": set_data.get("rpe"),
-                            "volume": set_data["weight"] * set_data["reps"],
-                        }
-                    )
-    return pd.DataFrame(flat_data)
+                    workout_data.append({
+                        "date": log_date,
+                        "exercise_name": exercise["name"],
+                        # --- NEW: Add muscle group to the dataframe ---
+                        "muscle_group": exercise_to_muscle_map.get(exercise["name"], "Other"),
+                        "set_number": s_idx + 1,
+                        "weight": set_data["weight"],
+                        "reps": set_data["reps"],
+                        "rpe": set_data.get("rpe"),
+                        "volume": set_data["weight"] * set_data["reps"],
+                    })
+
+    workout_df = pd.DataFrame(workout_data)
+    daily_df = pd.DataFrame(daily_data).set_index('date')
+
+    return workout_df, daily_df
 
 
-# --- Ollama Integration ---
+# --- NEW: e1RM Calculation Function ---
+def calculate_e1rm(df):
+    """
+    Calculates the estimated 1-Rep Max using the Brzycki formula.
+    Filters out reps > 12 as the formula becomes less accurate.
+    """
+    e1rm_df = df[df['reps'] <= 12].copy()
+    e1rm_df['e1rm'] = e1rm_df['weight'] / (1.0278 - (0.0278 * e1rm_df['reps']))
+    return e1rm_df
+
+
+# --- Ollama Integration (no changes needed here) ---
 def get_ollama_insight(data_json: str):
-    """Sends workout data to local Ollama for analysis."""
+    # ... (function remains the same)
     system_prompt = f"""
     You are Astra, an expert AI strength and conditioning coach. Your user, Himansh, has been logging his workouts.
     Analyze the following JSON data which represents his recent performance.
@@ -71,15 +98,12 @@ def get_ollama_insight(data_json: str):
     Focus on trends, potential plateaus, or areas of exceptional progress. Be specific. Do not be generic.
     Today's Date: {datetime.now().strftime('%Y-%m-%d')}
     """
-
     user_prompt = f"Here is my recent workout data in JSON format:\n{data_json}"
-
     try:
-        # THE FIX: Use the /api/chat endpoint and the corrected payload structure
         response = requests.post(
             "http://localhost:11434/api/chat",
             json={
-                "model": "gemma3:latest",  # Use a model you have installed
+                "model": "gemma3:latest",
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
@@ -91,7 +115,6 @@ def get_ollama_insight(data_json: str):
         response.raise_for_status()
         response_data = json.loads(response.text)
         return response_data.get("message", {}).get("content", "")
-
     except requests.exceptions.RequestException as e:
         return f"Error connecting to Ollama: {e}. Make sure the Ollama application is running."
 
@@ -99,123 +122,192 @@ def get_ollama_insight(data_json: str):
 # --- Main Dashboard App ---
 def main():
     st.title("🏋️ Vyayamam Performance Dashboard")
-    st.markdown(
-        "Your central command center for tracking progress and gaining insights."
-    )
+    st.markdown("Your central command center for tracking progress and gaining insights.")
 
     client = get_mongo_client()
-    df = load_data(client)
+    df_workouts, df_daily = load_data(client)
 
-    if df.empty:
+    if df_workouts.empty:
         st.warning("No workout data found. Go log some sets via WhatsApp!")
         return
 
-    # --- Sidebar Filters ---
+    # --- Sidebar ---
     st.sidebar.header("Filters")
-    all_exercises = sorted(df["exercise_name"].unique())
-    selected_exercises = st.sidebar.multiselect(
+    all_exercises = sorted(df_workouts["exercise_name"].unique())
+    selected_vol_exercises = st.sidebar.multiselect(
         "Select Exercises for Volume Trend",
         options=all_exercises,
-        default=[
-            ex
-            for ex in all_exercises
-            if "Press" in ex or "Squat" in ex or "Row" in ex or "Pulldown" in ex
-        ][
-            :3
-        ],  # Sensible defaults
+        default=[ex for ex in ["Smith Machine Incline Press", "Leg Press Machine", "Lat Pulldowns"] if ex in all_exercises]
+    )
+    # --- NEW: Sidebar filter for e1RM ---
+    compound_lifts = [ex for ex in all_exercises if "Press" in ex or "Squat" in ex or "RDL" in ex or "Row" in ex]
+    selected_e1rm_exercises = st.sidebar.multiselect(
+        "Select Exercises for e1RM Trend",
+        options=compound_lifts,
+        default=[ex for ex in ["Smith Machine Incline Press", "Leg Press Machine"] if ex in compound_lifts]
     )
 
-    # --- Main Layout ---
+    # --- Top Section (Volume Trend & PRs) ---
     col1, col2 = st.columns(2)
-
-    # --- 1. Total Volume Trend ---
     with col1:
         st.subheader("📈 Total Volume Trend")
-        if selected_exercises:
-            filtered_df = df[df["exercise_name"].isin(selected_exercises)]
-            volume_by_day = (
-                filtered_df.groupby(["date", "exercise_name"])["volume"]
-                .sum()
-                .reset_index()
-            )
-            fig = px.line(
-                volume_by_day,
-                x="date",
-                y="volume",
-                color="exercise_name",
-                title="Workout Volume (Weight x Reps x Sets) Over Time",
-                labels={
-                    "date": "Date",
-                    "volume": "Total Volume (lbs/kg)",
-                    "exercise_name": "Exercise",
-                },
-            )
+        if selected_vol_exercises:
+            filtered_df = df_workouts[df_workouts["exercise_name"].isin(selected_vol_exercises)]
+            volume_by_day = filtered_df.groupby(["date", "exercise_name"])["volume"].sum().reset_index()
+            fig = px.line(volume_by_day, x="date", y="volume", color="exercise_name", title="Workout Volume Over Time")
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info(
-                "Select one or more exercises from the sidebar to see the volume trend."
-            )
-
-    # --- 2. Personal Record (PR) Tracker ---
+            st.info("Select exercises from the sidebar to see the volume trend.")
     with col2:
         st.subheader("🏆 Personal Records (by Weight)")
-        pr_df = df.loc[df.groupby("exercise_name")["weight"].idxmax()]
-        pr_df = (
-            pr_df[["exercise_name", "weight", "reps", "date"]]
-            .rename(
-                columns={
-                    "exercise_name": "Exercise",
-                    "weight": "Max Weight",
-                    "reps": "Reps at Max",
-                    "date": "Date Set",
-                }
-            )
-            .sort_values(by="Exercise")
-            .reset_index(drop=True)
-        )
-        st.dataframe(pr_df, use_container_width=True)
+        pr_df = df_workouts.loc[df_workouts.groupby("exercise_name")["weight"].idxmax()]
+        pr_df = pr_df[["exercise_name", "weight", "reps", "date"]].rename(
+            columns={"exercise_name": "Exercise", "weight": "Max Weight", "reps": "Reps at Max", "date": "Date Set"}
+        ).sort_values(by="Exercise").reset_index(drop=True)
+        st.dataframe(pr_df, use_container_width=True, hide_index=True)
 
     st.divider()
 
-    # --- 3. Workout Consistency Heatmap ---
+    # --- NEW: e1RM Trend Chart ---
+    st.subheader("🚀 Estimated 1-Rep Max (e1RM) Trend")
+    if selected_e1rm_exercises:
+        e1rm_df = calculate_e1rm(df_workouts[df_workouts['exercise_name'].isin(selected_e1rm_exercises)])
+        # Find the max e1RM for each day to make the trend line clearer
+        daily_max_e1rm = e1rm_df.loc[e1rm_df.groupby(['date', 'exercise_name'])['e1rm'].idxmax()]
+        fig_e1rm = px.line(
+            daily_max_e1rm,
+            x='date',
+            y='e1rm',
+            color='exercise_name',
+            title="Strength Progression (e1RM)",
+            labels={'date': 'Date', 'e1rm': 'Estimated 1-Rep Max (lbs/kg)', 'exercise_name': 'Exercise'}
+        )
+        fig_e1rm.update_traces(mode='lines+markers')
+        st.plotly_chart(fig_e1rm, use_container_width=True)
+    else:
+        st.info("Select compound lifts from the sidebar to see your e1RM trend.")
+
+    st.divider()
+
+    # --- NEW: Muscle Group Volume Section ---
+    st.subheader("📊 Weekly Volume by Muscle Group")
+    if 'muscle_group' in df_workouts.columns:
+        # Resample data by week. 'W-MON' means weeks start on Monday.
+        df_workouts['week'] = df_workouts['date'].dt.to_period('W-MON').apply(lambda p: p.start_time)
+        
+        weekly_muscle_volume = df_workouts.groupby(['week', 'muscle_group'])['volume'].sum().reset_index()
+
+        fig_muscle = px.bar(
+            weekly_muscle_volume,
+            x='week',
+            y='volume',
+            color='muscle_group',
+            title="Total Weekly Volume by Primary Muscle Group",
+            labels={'week': 'Week', 'volume': 'Total Volume (lbs/kg)', 'muscle_group': 'Muscle Group'},
+            color_discrete_map={
+                "Chest": "#0099C6", "Back": "#34A853", "Shoulders": "#A23B72",
+                "Quads": "#F47920", "Hamstrings": "#F15A24", "Biceps": "#9BC53D",
+                "Triceps": "#662E91", "Cardio": "#E63946", "Other": "grey"
+            }
+        )
+        st.plotly_chart(fig_muscle, use_container_width=True)
+    else:
+        st.info("Muscle group data not available for analysis.")
+
+    st.divider()
+
+    # --- Consistency Heatmap (no changes needed here) ---
     st.subheader("🗓️ Workout Consistency")
-    df["day"] = df["date"].dt.date
-    consistency = df.groupby("day").size().reset_index(name="sets")
-    consistency["year"] = pd.to_datetime(consistency["day"]).dt.year
-    # Create a full date range for the heatmap
-    date_range = pd.to_datetime(
-        pd.date_range(start=consistency["day"].min(), end=consistency["day"].max())
-    )
+    df_workouts["day"] = df_workouts["date"].dt.date
+    consistency = df_workouts.groupby("day").size().reset_index(name="sets")
+    date_range = pd.to_datetime(pd.date_range(start=consistency["day"].min(), end=consistency["day"].max()))
     calendar_df = pd.DataFrame(index=date_range)
-    calendar_df["sets"] = (
-        calendar_df.index.to_series()
-        .dt.date.map(consistency.set_index("day")["sets"])
-        .fillna(0)
-    )
-
-    # Using Plotly for a GitHub-style heatmap
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=calendar_df["sets"],
-            x=calendar_df.index,
-            y=[""],  # Fake y-axis
-            colorscale="Greens",
-            showscale=False,
-        )
-    )
-    fig.update_layout(
-        title="Workout Days Heatmap", yaxis_showticklabels=False, yaxis_visible=False
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    calendar_df["sets"] = calendar_df.index.to_series().dt.date.map(consistency.set_index("day")["sets"]).fillna(0)
+    fig_heatmap = go.Figure(data=go.Heatmap(z=calendar_df["sets"], x=calendar_df.index, y=[""], colorscale="Greens", showscale=False))
+    fig_heatmap.update_layout(title="Workout Days Heatmap", yaxis_showticklabels=False, yaxis_visible=False)
+    st.plotly_chart(fig_heatmap, use_container_width=True)
 
     st.divider()
 
-    # --- 4. Ollama AI Insights ---
+    # --- Readiness vs Performance (no changes needed) ---
+    st.subheader("🧘‍♂️ Readiness vs. Performance")
+
+    # Calculate total daily volume
+    daily_volume = df_workouts.groupby('date')['volume'].sum()
+
+    # Merge with daily readiness data
+    performance_df = pd.merge(daily_volume, df_daily, on='date', how='left').reset_index()
+    performance_df = performance_df.dropna(subset=['sleep_hours', 'stress_level', 'volume'])
+
+    if not performance_df.empty:
+        # Create a dual-axis chart
+        fig_corr = go.Figure()
+
+        # Bar chart for Volume
+        fig_corr.add_trace(
+            go.Bar(
+                x=performance_df["date"],
+                y=performance_df["volume"],
+                name="Workout Volume",
+                marker_color="lightgreen",
+            )
+        )
+
+        # Line chart for Sleep
+        fig_corr.add_trace(
+            go.Scatter(
+                x=performance_df["date"],
+                y=performance_df["sleep_hours"],
+                name="Sleep (hours)",
+                yaxis="y2",
+                mode="lines+markers",
+                line=dict(color="blue"),
+            )
+        )
+
+        # Line chart for Stress
+        fig_corr.add_trace(
+            go.Scatter(
+                x=performance_df["date"],
+                y=performance_df["stress_level"],
+                name="Stress (1-10)",
+                yaxis="y2",
+                mode="lines+markers",
+                line=dict(color="red", dash="dash"),
+            )
+        )
+
+        fig_corr.update_layout(
+            title_text="How Readiness Affects Performance",
+            xaxis_title="Date",
+            yaxis_title="Total Workout Volume (lbs/kg)",
+            yaxis=dict(side="left", showgrid=False),
+            yaxis2=dict(
+                title="Readiness Metrics",
+                overlaying="y",
+                side="right",
+                range=[0, 11],  # Set range for sleep/stress axis
+                showgrid=False,
+            ),
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+            ),
+        )
+        st.plotly_chart(fig_corr, use_container_width=True)
+    else:
+        st.info(
+            "Not enough readiness and workout data logged on the same days to show correlations."
+        )
+
+    st.divider()
+
+    # --- AI Insights Section (no changes needed) ---
     st.subheader("🤖 Astra's AI Insight")
     if st.button("Analyze My Recent Performance"):
         with st.spinner("Astra is thinking... Analyzing your last 10 workouts..."):
-            # Prepare recent data for the LLM
-            recent_data = df.tail(100).to_json(orient="records", date_format="iso")
+            recent_data = df_workouts.tail(100).to_json(
+                orient="records", date_format="iso"
+            )
             insight = get_ollama_insight(recent_data)
             st.info(insight)
 

@@ -2,7 +2,15 @@
 from fastapi import APIRouter, Form, Response
 from twilio.twiml.messaging_response import MessagingResponse
 from app.api.parser import parse_message
-from app.db.operations import log_set, get_or_create_daily_log, get_next_exercise_details
+from app.db.operations import (
+    log_set, 
+    get_or_create_daily_log, 
+    get_next_exercise_details, 
+    log_readiness, 
+    grade_and_summarize_session,
+    get_todays_exercises,
+    get_all_exercises # <-- Add this
+)
 from app.core.logging_config import log
 from app.api.ai_coach import get_ai_response
 
@@ -79,7 +87,8 @@ async def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
     response_message = ""
 
     if not parsed_data:
-        response_message = "Sorry, I didn't understand that. Please use the format:\n'exercise weight reps [rpe #] [notes ...]'\nOr a command like 'next'."
+        # --- NEW: Add new commands to the help message ---
+        response_message = "Sorry, I didn't understand that. Please use one of the formats:\n\n*Log a set:*\n`exercise weight reps`\n\n*Commands:*\n`next`\n`/ask [question]`\n`/sleep [hours]`\n`/stress [1-10]`\n`/soreness [area]`"
     elif "error" in parsed_data:
         if parsed_data["error"] == "exercise_not_found":
             response_message = f"❌ Could not find an exercise matching '{parsed_data['query']}'. Please check the name and try again."
@@ -87,6 +96,41 @@ async def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
             response_message = "🤖 Please ask a question after the /ask command. For example:\n`/ask how is my chest progressing?`"
         else:
             response_message = "❌ There was an error in the format of your log. Please check the weight/reps/rpe."
+    
+    # --- ADD THIS NEW LOGIC BLOCK ---
+    elif parsed_data["command"] == "log_readiness":
+        metric = parsed_data["metric"]
+        value = parsed_data["value"]
+        
+        await log_readiness(user_id=user_phone_number, metric=metric, value=value)
+        
+        # Create a user-friendly response
+        if metric == "sleep_hours":
+            response_message = f"✅ Sleep logged: {value} hours. Sweet dreams! 😴"
+        elif metric == "stress_level":
+            response_message = f"✅ Stress level logged as {value}/10. Remember to take it easy if you need to. 🙏"
+        elif metric == "soreness":
+            response_message = f"✅ Soreness in '{value}' logged. Make sure to stretch and recover! 💪"
+    # --- END OF NEW BLOCK ---
+
+    # --- NEW: Handle workout state management ---
+    elif parsed_data["command"] == "start_workout":
+        # Inform user to use /end workout for summary, but keep old logic for now
+        response_message = "🔥 Workout started! Let's get to it. Your first exercise is waiting. Type `next` to see it."
+    elif parsed_data["command"] == "end_workout":
+        result = await grade_and_summarize_session(user_id=user_phone_number)
+        if result["status"] == "success":
+            response_message = (
+                f"🎉 *Workout Complete!* 🎉\n\n"
+                f"*> Session Grade: {result['grade']}*\n\n"
+                f"*Astra's Summary:*\n_{result['summary']}_\n\n"
+                "Amazing work today. Your data has been saved. Time to rest, recover, and refuel! 💪"
+            )
+        else:
+            # This handles the case where there's no workout to end.
+            response_message = f"🤔 Hmm, {result['message']}"
+    # --- END OF NEW BLOCKS ---
+
     elif parsed_data["command"] == "log_set":
         num_sets_done = await log_set(user_id=user_phone_number, exercise_name=parsed_data["exercise_name"], exercise_id=parsed_data["exercise_id"], set_log=parsed_data["set_log"])
         target_sets = parsed_data["target_sets"]
@@ -118,6 +162,50 @@ async def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
             response_message = ai_response
     elif parsed_data["command"] == "ping":
         response_message = "🏓 Pong! The entire pipeline is alive and kicking.\n\nIf this were a real ping, you'd have just lost a life. 😜"
+    # --- RENAME `list_exercises` to `list_todays_exercises` AND ADD THE NEW BLOCK ---
+    elif parsed_data["command"] == "list_todays_exercises":
+        exercise_list = await get_todays_exercises()
+        if not exercise_list:
+            response_message = "Looks like there's no workout scheduled for today. Enjoy your rest day! \U0001F334"
+        else:
+            response_message = "\U0001F4CB *Today's Workout Plan:*\n\n"
+            response_message += "\n".join(f"• `{name}`" for name in exercise_list)
+            response_message += "\n\n_You can log these with slight variations, I'll do my best to understand!_"
+
+    elif parsed_data["command"] == "list_all_exercises":
+        all_exercises = await get_all_exercises()
+        response_message = "\U0001F4CB *Master List of All Loggable Exercises:*\n\n"
+        response_message += "\n".join(f"• `{name}`" for name in all_exercises)
+        response_message += "\n\n_You can log these exercises with the same format: `exercise weight reps`_"
+    
+    elif parsed_data["command"] == "get_help":
+        response_message = (
+            "🤖 *Welcome to Vyayamam AI!* Here's what you can do:\n\n"
+            "1️⃣ *Log a Workout Set*\n"
+            "Use the format: `exercise weight reps`\n"
+            "_Example:_\n`smith incline 120 8`\n\n"
+            "You can also add optional notes or RPE:\n"
+            "`leg press 300 10 rpe 8`\n"
+            "`db rows 50 12 notes felt strong`\n\n"
+            "2️⃣ *Get Workout Guidance*\n"
+            "Type `next` to see your next planned exercise, including your last performance and PR.\n\n"
+            "3️⃣ *Manage Your Session*\n"
+            "• `/start` - Officially begin your workout session.\n"
+            "• `/end` - Finish your session to get a grade and an AI-powered summary.\n\n"
+            "4️⃣ *Log Daily Readiness*\n"
+            "• `/sleep [hours]` - _e.g., /sleep 7.5_\n"
+            "• `/stress [1-10]` - _e.g., /stress 3_\n"
+            "• `/soreness [area]` - _e.g., /soreness back_\n\n"
+            "5️⃣ *Chat with Your AI Coach*\n"
+            "Use `/ask` followed by your question.\n"
+            "_Examples:_\n"
+            "`/ask how is my squat progressing?`\n"
+            "`/ask what should I focus on for my chest?`\n\n"
+            "6️⃣ *Check System Status*\n"
+            "Type `/ping` to see if the system is online.\n\n"
+            "7️⃣ *View Your Dashboard*\n"
+            "Don't forget to check the web dashboard for detailed charts and trends!"
+        )
     else:
         response_message = f"✅ Command '{parsed_data['command']}' received. This feature is coming soon!"
     
