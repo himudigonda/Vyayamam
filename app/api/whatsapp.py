@@ -8,7 +8,8 @@ from app.db.operations import (
     get_next_exercise_details, 
     log_readiness, 
     grade_and_summarize_session,
-    get_todays_exercises
+    get_todays_exercises,
+    get_all_exercises # <-- Add this
 )
 from app.core.logging_config import log
 from app.api.ai_coach import get_ai_response
@@ -161,15 +162,21 @@ async def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
             response_message = ai_response
     elif parsed_data["command"] == "ping":
         response_message = "🏓 Pong! The entire pipeline is alive and kicking.\n\nIf this were a real ping, you'd have just lost a life. 😜"
-    # --- ADD THIS NEW BLOCK after the /help block ---
-    elif parsed_data["command"] == "list_exercises":
+    # --- RENAME `list_exercises` to `list_todays_exercises` AND ADD THE NEW BLOCK ---
+    elif parsed_data["command"] == "list_todays_exercises":
         exercise_list = await get_todays_exercises()
         if not exercise_list:
-            response_message = "Looks like there's no workout scheduled for today. Enjoy your rest day! 🌴"
+            response_message = "Looks like there's no workout scheduled for today. Enjoy your rest day! \U0001F334"
         else:
-            response_message = "📋 *Today's Workout Plan:*\n\n"
+            response_message = "\U0001F4CB *Today's Workout Plan:*\n\n"
             response_message += "\n".join(f"• `{name}`" for name in exercise_list)
             response_message += "\n\n_You can log these with slight variations, I'll do my best to understand!_"
+
+    elif parsed_data["command"] == "list_all_exercises":
+        all_exercises = await get_all_exercises()
+        response_message = "\U0001F4CB *Master List of All Loggable Exercises:*\n\n"
+        response_message += "\n".join(f"• `{name}`" for name in all_exercises)
+        response_message += "\n\n_You can log these exercises with the same format: `exercise weight reps`_"
     
     elif parsed_data["command"] == "get_help":
         response_message = (

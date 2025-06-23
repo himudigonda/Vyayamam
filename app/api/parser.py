@@ -21,9 +21,14 @@ async def parse_message(message: str) -> Dict[str, Any] | None:
     log.info(f"\U0001F9E0 PARSING: Received message for parsing: '{message}'")
 
     # --- Check for Commands First ---
+    # --- REPLACE THE `/list` BLOCK WITH THIS ---
+    if message.lower() == "/list all":
+        log.info("✅ SUCCESS: Parsed command 'list_all_exercises'.")
+        return {"command": "list_all_exercises"}
     if message.lower() == "/list":
-        log.info("✅ SUCCESS: Parsed command 'list_exercises'.")
-        return {"command": "list_exercises"}
+        log.info("✅ SUCCESS: Parsed command 'list_todays_exercises'.")
+        return {"command": "list_todays_exercises"}
+    # --- END OF REPLACEMENT ---
         
     if message.lower() == "/help":
         log.info("✅ SUCCESS: Parsed command 'help'.")

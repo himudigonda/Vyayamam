@@ -442,3 +442,18 @@ async def get_todays_exercises() -> list[str]:
     # Return a sorted list of the official names
     exercise_names = sorted([ex["name"] for ex in plan["exercises"]], key=lambda name: [ex for ex in plan["exercises"] if ex["name"] == name][0]["order"])
     return exercise_names
+
+# --- ADD THIS NEW FUNCTION at the end of the file ---
+async def get_all_exercises() -> list[str]:
+    """
+    Retrieves a list of all unique, loggable exercise names from all workout plans.
+    """
+    db = get_db()
+    log.info("💾 DATABASE: Fetching a list of ALL exercises from the workout definitions.")
+    all_plans = await db.workout_definitions.find({}).to_list(length=10)  # Get all 7 day plans
+    unique_exercise_names = set()
+    for plan in all_plans:
+        for exercise in plan.get("exercises", []):
+            unique_exercise_names.add(exercise["name"])
+    # Return a sorted list for clean presentation
+    return sorted(list(unique_exercise_names))
