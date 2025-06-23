@@ -77,6 +77,17 @@ def load_data(_client):
     return workout_df, daily_df
 
 
+# --- NEW: e1RM Calculation Function ---
+def calculate_e1rm(df):
+    """
+    Calculates the estimated 1-Rep Max using the Brzycki formula.
+    Filters out reps > 12 as the formula becomes less accurate.
+    """
+    e1rm_df = df[df['reps'] <= 12].copy()
+    e1rm_df['e1rm'] = e1rm_df['weight'] / (1.0278 - (0.0278 * e1rm_df['reps']))
+    return e1rm_df
+
+
 # --- Ollama Integration (no changes needed here) ---
 def get_ollama_insight(data_json: str):
     # ... (function remains the same)
@@ -120,31 +131,33 @@ def main():
         st.warning("No workout data found. Go log some sets via WhatsApp!")
         return
 
-    # --- Sidebar (no changes needed here) ---
+    # --- Sidebar ---
     st.sidebar.header("Filters")
     all_exercises = sorted(df_workouts["exercise_name"].unique())
-    selected_exercises = st.sidebar.multiselect(
+    selected_vol_exercises = st.sidebar.multiselect(
         "Select Exercises for Volume Trend",
         options=all_exercises,
         default=[ex for ex in ["Smith Machine Incline Press", "Leg Press Machine", "Lat Pulldowns"] if ex in all_exercises]
+    )
+    # --- NEW: Sidebar filter for e1RM ---
+    compound_lifts = [ex for ex in all_exercises if "Press" in ex or "Squat" in ex or "RDL" in ex or "Row" in ex]
+    selected_e1rm_exercises = st.sidebar.multiselect(
+        "Select Exercises for e1RM Trend",
+        options=compound_lifts,
+        default=[ex for ex in ["Smith Machine Incline Press", "Leg Press Machine"] if ex in compound_lifts]
     )
 
     # --- Top Section (Volume Trend & PRs) ---
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("📈 Total Volume Trend")
-        if selected_exercises:
-            filtered_df = df_workouts[df_workouts["exercise_name"].isin(selected_exercises)]
+        if selected_vol_exercises:
+            filtered_df = df_workouts[df_workouts["exercise_name"].isin(selected_vol_exercises)]
             volume_by_day = filtered_df.groupby(["date", "exercise_name"])["volume"].sum().reset_index()
-            fig = px.line(
-                volume_by_day, x="date", y="volume", color="exercise_name",
-                title="Workout Volume (Weight x Reps x Sets) Over Time",
-                labels={"date": "Date", "volume": "Total Volume (lbs/kg)", "exercise_name": "Exercise"}
-            )
+            fig = px.line(volume_by_day, x="date", y="volume", color="exercise_name", title="Workout Volume Over Time")
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("Select one or more exercises from the sidebar to see the volume trend.")
-    
+            st.info("Select exercises from the sidebar to see the volume trend.")
     with col2:
         st.subheader("🏆 Personal Records (by Weight)")
         pr_df = df_workouts.loc[df_workouts.groupby("exercise_name")["weight"].idxmax()]
@@ -152,6 +165,27 @@ def main():
             columns={"exercise_name": "Exercise", "weight": "Max Weight", "reps": "Reps at Max", "date": "Date Set"}
         ).sort_values(by="Exercise").reset_index(drop=True)
         st.dataframe(pr_df, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # --- NEW: e1RM Trend Chart ---
+    st.subheader("🚀 Estimated 1-Rep Max (e1RM) Trend")
+    if selected_e1rm_exercises:
+        e1rm_df = calculate_e1rm(df_workouts[df_workouts['exercise_name'].isin(selected_e1rm_exercises)])
+        # Find the max e1RM for each day to make the trend line clearer
+        daily_max_e1rm = e1rm_df.loc[e1rm_df.groupby(['date', 'exercise_name'])['e1rm'].idxmax()]
+        fig_e1rm = px.line(
+            daily_max_e1rm,
+            x='date',
+            y='e1rm',
+            color='exercise_name',
+            title="Strength Progression (e1RM)",
+            labels={'date': 'Date', 'e1rm': 'Estimated 1-Rep Max (lbs/kg)', 'exercise_name': 'Exercise'}
+        )
+        fig_e1rm.update_traces(mode='lines+markers')
+        st.plotly_chart(fig_e1rm, use_container_width=True)
+    else:
+        st.info("Select compound lifts from the sidebar to see your e1RM trend.")
 
     st.divider()
 
