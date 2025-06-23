@@ -1,6 +1,6 @@
 # app/db/operations.py
 import re
-from datetime import date
+from datetime import date, timedelta
 from app.db.database import get_db
 from app.core.models import DailyLog, SetLog, WorkoutSession, CompletedExercise, PyObjectId
 from app.core.logging_config import log
@@ -120,3 +120,92 @@ async def log_set(
                 )
                 return num_sets
     return 0
+
+
+async def get_next_exercise_details(user_id: str) -> dict | None:
+    """
+    Determines the next exercise for the user based on today's plan and progress.
+    Fetches historical data for coaching context.
+    """
+    db = get_db()
+    today_weekday = date.today().weekday() + 1  # Monday is 1, Sunday is 7
+
+    log.info(f"🧠 COACHING: Getting next exercise for user '{user_id}' on weekday {today_weekday}.")
+
+    # 1. Get today's workout plan
+    todays_plan = await db.workout_definitions.find_one({"day_of_week": today_weekday})
+    if not todays_plan or not todays_plan.get("exercises"):
+        log.warning("No workout plan found for today.")
+        return {"message": "No workout scheduled for today. Enjoy your rest!"}
+
+    # 2. Get today's progress
+    daily_log = await get_or_create_daily_log(user_id)
+    completed_exercises_today = daily_log.workout_session.completed_exercises if daily_log.workout_session else []
+    
+    last_completed_order = 0
+    if completed_exercises_today:
+        completed_names = {ex.name for ex in completed_exercises_today}
+        # Find the highest 'order' number from the plan that has been completed
+        for ex_def in todays_plan["exercises"]:
+            if ex_def["name"] in completed_names and ex_def["order"] > last_completed_order:
+                last_completed_order = ex_def["order"]
+    
+    log.info(f"Last completed exercise order was {last_completed_order}.")
+
+    # 3. Determine the next exercise
+    next_exercise_def = None
+    for ex_def in sorted(todays_plan["exercises"], key=lambda x: x["order"]):
+        if ex_def["order"] > last_completed_order:
+            next_exercise_def = ex_def
+            break
+            
+    if not next_exercise_def:
+        log.info("✅ SUCCESS: All exercises for today are complete.")
+        return {"message": "🎉 Workout complete! You've finished all exercises for today. Great work!"}
+
+    log.info(f"Next exercise determined: '{next_exercise_def['name']}'.")
+    exercise_id = next_exercise_def["exercise_id"]
+
+    # 4. Find last session's stats for this exercise
+    last_session = await db.daily_logs.find(
+        {"user_id": user_id, "workout_session.completed_exercises.exercise_id": exercise_id},
+        sort=[("date", -1)],
+        limit=1
+    ).to_list(1)
+
+    last_performance = "No previous data."
+    if last_session:
+        for ex in last_session[0]["workout_session"]["completed_exercises"]:
+            if ex["exercise_id"] == exercise_id and ex["sets"]:
+                last_set = ex["sets"][-1] # Get the last set
+                last_performance = f"{last_set['weight']} lbs/kg x {last_set['reps']} reps"
+                break
+    
+    # 5. Find all-time PR for this exercise
+    pipeline = [
+        {"$match": {"user_id": user_id, "workout_session.completed_exercises.exercise_id": exercise_id}},
+        {"$unwind": "$workout_session.completed_exercises"},
+        {"$match": {"workout_session.completed_exercises.exercise_id": exercise_id}},
+        {"$unwind": "$workout_session.completed_exercises.sets"},
+        {"$group": {"_id": None, "pr_weight": {"$max": "$workout_session.completed_exercises.sets.weight"}}}
+    ]
+    pr_result = await db.daily_logs.aggregate(pipeline).to_list(1)
+    
+    personal_record = "No PR set yet."
+    target_weight = "Set a baseline!"
+    pr_weight = 0
+    if pr_result:
+        pr_weight = pr_result[0]['pr_weight']
+        personal_record = f"{pr_weight} lbs/kg"
+        target_weight = f"{pr_weight + 2.5} lbs/kg (Progressive Overload)"
+
+    return {
+        "message": "next_exercise",
+        "details": {
+            "name": next_exercise_def["name"],
+            "target": f"{next_exercise_def['target_sets']} sets of {next_exercise_def['target_reps']} reps",
+            "last_performance": last_performance,
+            "personal_record": personal_record,
+            "target_weight": target_weight
+        }
+    }
