@@ -2,19 +2,23 @@
 fastapi
 uvicorn[standard]
 
+# Pydantic - Core validation & Settings management
+pydantic
+pydantic-settings
+
 # WhatsApp Messaging via Twilio
 twilio
 
 # MongoDB Driver
 pymongo
 
-# Environment Variable Management
+# Environment Variable Loading
 python-dotenv
 
 # Data Analytics & Dashboard
 streamlit
 pandas
-plotly # For advanced charts in Streamlit
+plotly
 
 # Local LLM Communication
 requests
