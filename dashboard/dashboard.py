@@ -30,53 +30,49 @@ def get_mongo_client():
     return client
 
 
-# --- MODIFIED: Enhanced data loading function ---
+# --- MODIFIED: Enhanced data loading function for muscle groups ---
 @st.cache_data(ttl=600)  # Cache data for 10 minutes
 def load_data(_client):
-    """Loads and flattens all daily logs, including readiness data."""
+    """Loads and flattens data, now including muscle group mappings."""
     db = _client[settings.DB_NAME]
+
+    # --- NEW: Fetch workout definitions to map exercises to muscle groups ---
+    plan_definitions = list(db.workout_definitions.find({}))
+    exercise_to_muscle_map = {}
+    for day_plan in plan_definitions:
+        for exercise in day_plan.get("exercises", []):
+            # We take the first primary muscle group for simplicity in this chart
+            if exercise.get("primary_muscle_groups"):
+                exercise_to_muscle_map[exercise["name"]] = exercise["primary_muscle_groups"][0]
+
     logs = list(db.daily_logs.find({}))
     if not logs:
         return pd.DataFrame(), pd.DataFrame()  # Return two empty dataframes
 
-    # --- Flatten workout data (as before) ---
     workout_data = []
-    # --- NEW: Flatten readiness and daily data ---
     daily_data = []
-
     for log in logs:
         log_date = pd.to_datetime(log["date"])
-
-        # Process readiness data for each day
         readiness = log.get("readiness", {})
-        daily_data.append(
-            {
-                "date": log_date,
-                "sleep_hours": readiness.get("sleep_hours"),
-                "stress_level": readiness.get("stress_level"),
-            }
-        )
+        daily_data.append({"date": log_date, "sleep_hours": readiness.get("sleep_hours"), "stress_level": readiness.get("stress_level")})
 
-        # Process workout data if a session exists
-        if log.get("workout_session") and log["workout_session"].get(
-            "completed_exercises"
-        ):
+        if log.get("workout_session") and log["workout_session"].get("completed_exercises"):
             for exercise in log["workout_session"]["completed_exercises"]:
                 for s_idx, set_data in enumerate(exercise["sets"]):
-                    workout_data.append(
-                        {
-                            "date": log_date,
-                            "exercise_name": exercise["name"],
-                            "set_number": s_idx + 1,
-                            "weight": set_data["weight"],
-                            "reps": set_data["reps"],
-                            "rpe": set_data.get("rpe"),
-                            "volume": set_data["weight"] * set_data["reps"],
-                        }
-                    )
+                    workout_data.append({
+                        "date": log_date,
+                        "exercise_name": exercise["name"],
+                        # --- NEW: Add muscle group to the dataframe ---
+                        "muscle_group": exercise_to_muscle_map.get(exercise["name"], "Other"),
+                        "set_number": s_idx + 1,
+                        "weight": set_data["weight"],
+                        "reps": set_data["reps"],
+                        "rpe": set_data.get("rpe"),
+                        "volume": set_data["weight"] * set_data["reps"],
+                    })
 
     workout_df = pd.DataFrame(workout_data)
-    daily_df = pd.DataFrame(daily_data).set_index("date")
+    daily_df = pd.DataFrame(daily_data).set_index('date')
 
     return workout_df, daily_df
 
@@ -115,12 +111,9 @@ def get_ollama_insight(data_json: str):
 # --- Main Dashboard App ---
 def main():
     st.title("🏋️ Vyayamam Performance Dashboard")
-    st.markdown(
-        "Your central command center for tracking progress and gaining insights."
-    )
+    st.markdown("Your central command center for tracking progress and gaining insights.")
 
     client = get_mongo_client()
-    # --- MODIFIED: Load both dataframes ---
     df_workouts, df_daily = load_data(client)
 
     if df_workouts.empty:
@@ -133,111 +126,84 @@ def main():
     selected_exercises = st.sidebar.multiselect(
         "Select Exercises for Volume Trend",
         options=all_exercises,
-        default=[
-            ex
-            for ex in [
-                "Smith Machine Incline Press",
-                "Leg Press Machine",
-                "Lat Pulldowns",
-            ]
-            if ex in all_exercises
-        ],
+        default=[ex for ex in ["Smith Machine Incline Press", "Leg Press Machine", "Lat Pulldowns"] if ex in all_exercises]
     )
 
-    # --- Main Layout (no changes needed in top section) ---
+    # --- Top Section (Volume Trend & PRs) ---
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("📈 Total Volume Trend")
         if selected_exercises:
-            filtered_df = df_workouts[
-                df_workouts["exercise_name"].isin(selected_exercises)
-            ]
-            volume_by_day = (
-                filtered_df.groupby(["date", "exercise_name"])["volume"]
-                .sum()
-                .reset_index()
-            )
+            filtered_df = df_workouts[df_workouts["exercise_name"].isin(selected_exercises)]
+            volume_by_day = filtered_df.groupby(["date", "exercise_name"])["volume"].sum().reset_index()
             fig = px.line(
-                volume_by_day,
-                x="date",
-                y="volume",
-                color="exercise_name",
+                volume_by_day, x="date", y="volume", color="exercise_name",
                 title="Workout Volume (Weight x Reps x Sets) Over Time",
-                labels={
-                    "date": "Date",
-                    "volume": "Total Volume (lbs/kg)",
-                    "exercise_name": "Exercise",
-                },
+                labels={"date": "Date", "volume": "Total Volume (lbs/kg)", "exercise_name": "Exercise"}
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info(
-                "Select one or more exercises from the sidebar to see the volume trend."
-            )
-
+            st.info("Select one or more exercises from the sidebar to see the volume trend.")
+    
     with col2:
         st.subheader("🏆 Personal Records (by Weight)")
         pr_df = df_workouts.loc[df_workouts.groupby("exercise_name")["weight"].idxmax()]
-        pr_df = (
-            pr_df[["exercise_name", "weight", "reps", "date"]]
-            .rename(
-                columns={
-                    "exercise_name": "Exercise",
-                    "weight": "Max Weight",
-                    "reps": "Reps at Max",
-                    "date": "Date Set",
-                }
-            )
-            .sort_values(by="Exercise")
-            .reset_index(drop=True)
-        )
+        pr_df = pr_df[["exercise_name", "weight", "reps", "date"]].rename(
+            columns={"exercise_name": "Exercise", "weight": "Max Weight", "reps": "Reps at Max", "date": "Date Set"}
+        ).sort_values(by="Exercise").reset_index(drop=True)
         st.dataframe(pr_df, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # --- NEW: Muscle Group Volume Section ---
+    st.subheader("📊 Weekly Volume by Muscle Group")
+    if 'muscle_group' in df_workouts.columns:
+        # Resample data by week. 'W-MON' means weeks start on Monday.
+        df_workouts['week'] = df_workouts['date'].dt.to_period('W-MON').apply(lambda p: p.start_time)
+        
+        weekly_muscle_volume = df_workouts.groupby(['week', 'muscle_group'])['volume'].sum().reset_index()
+
+        fig_muscle = px.bar(
+            weekly_muscle_volume,
+            x='week',
+            y='volume',
+            color='muscle_group',
+            title="Total Weekly Volume by Primary Muscle Group",
+            labels={'week': 'Week', 'volume': 'Total Volume (lbs/kg)', 'muscle_group': 'Muscle Group'},
+            color_discrete_map={
+                "Chest": "#0099C6", "Back": "#34A853", "Shoulders": "#A23B72",
+                "Quads": "#F47920", "Hamstrings": "#F15A24", "Biceps": "#9BC53D",
+                "Triceps": "#662E91", "Cardio": "#E63946", "Other": "grey"
+            }
+        )
+        st.plotly_chart(fig_muscle, use_container_width=True)
+    else:
+        st.info("Muscle group data not available for analysis.")
 
     st.divider()
 
     # --- Consistency Heatmap (no changes needed here) ---
     st.subheader("🗓️ Workout Consistency")
-    # ... (code for heatmap remains the same, using df_workouts)
     df_workouts["day"] = df_workouts["date"].dt.date
     consistency = df_workouts.groupby("day").size().reset_index(name="sets")
-    date_range = pd.to_datetime(
-        pd.date_range(start=consistency["day"].min(), end=consistency["day"].max())
-    )
+    date_range = pd.to_datetime(pd.date_range(start=consistency["day"].min(), end=consistency["day"].max()))
     calendar_df = pd.DataFrame(index=date_range)
-    calendar_df["sets"] = (
-        calendar_df.index.to_series()
-        .dt.date.map(consistency.set_index("day")["sets"])
-        .fillna(0)
-    )
-    fig_heatmap = go.Figure(
-        data=go.Heatmap(
-            z=calendar_df["sets"],
-            x=calendar_df.index,
-            y=[""],
-            colorscale="Greens",
-            showscale=False,
-        )
-    )
-    fig_heatmap.update_layout(
-        title="Workout Days Heatmap", yaxis_showticklabels=False, yaxis_visible=False
-    )
+    calendar_df["sets"] = calendar_df.index.to_series().dt.date.map(consistency.set_index("day")["sets"]).fillna(0)
+    fig_heatmap = go.Figure(data=go.Heatmap(z=calendar_df["sets"], x=calendar_df.index, y=[""], colorscale="Greens", showscale=False))
+    fig_heatmap.update_layout(title="Workout Days Heatmap", yaxis_showticklabels=False, yaxis_visible=False)
     st.plotly_chart(fig_heatmap, use_container_width=True)
 
     st.divider()
 
-    # --- NEW: Readiness vs. Performance Section ---
+    # --- Readiness vs Performance (no changes needed) ---
     st.subheader("🧘‍♂️ Readiness vs. Performance")
 
     # Calculate total daily volume
-    daily_volume = df_workouts.groupby("date")["volume"].sum()
+    daily_volume = df_workouts.groupby('date')['volume'].sum()
 
     # Merge with daily readiness data
-    performance_df = pd.merge(
-        daily_volume, df_daily, on="date", how="left"
-    ).reset_index()
-    performance_df = performance_df.dropna(
-        subset=["sleep_hours", "stress_level", "volume"]
-    )
+    performance_df = pd.merge(daily_volume, df_daily, on='date', how='left').reset_index()
+    performance_df = performance_df.dropna(subset=['sleep_hours', 'stress_level', 'volume'])
 
     if not performance_df.empty:
         # Create a dual-axis chart
