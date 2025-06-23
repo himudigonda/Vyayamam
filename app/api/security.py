@@ -1,6 +1,6 @@
 # app/api/security.py
 
-from fastapi import Request, HTTPException, Form
+from fastapi import Request, HTTPException
 from twilio.request_validator import RequestValidator
 from app.core.config import settings
 from app.core.logging_config import log
@@ -23,18 +23,19 @@ async def validate_twilio_request(request: Request):
         twilio_signature = request.headers.get("X-Twilio-Signature")
         
         if not twilio_signature:
-            log.error("🔒 SECURITY: Request is missing X-Twilio-Signature header.")
+            log.error("🔒 SECURITY: Request rejected. Missing X-Twilio-Signature header.")
             raise HTTPException(status_code=400, detail="Missing Twilio signature.")
 
         # Use the validator to check if the request is valid
         if not validator.validate(url, dict(form_data), twilio_signature):
-            log.error("🔒 SECURITY: Invalid Twilio signature. Request rejected.")
+            client_ip = getattr(request.client, 'host', 'unknown')
+            log.error(f"🔒 SECURITY: Invalid Twilio signature. Request from '{client_ip}' rejected.")
             raise HTTPException(status_code=403, detail="Invalid Twilio signature.")
         
-        log.info("✅ SECURITY: Twilio request signature validated successfully.")
+        log.info("✅ 🔒 SECURITY: Twilio request signature validated successfully.")
         
     except Exception as e:
-        log.error(f"🔒 SECURITY: Error during Twilio validation: {e}")
+        log.error(f"❌ 🔒 SECURITY: An unexpected error occurred during Twilio validation: {e}")
         raise HTTPException(status_code=500, detail="Error during request validation.")
 
     return True # If validation succeeds, the request can proceed

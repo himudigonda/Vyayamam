@@ -3,13 +3,8 @@ from fastapi import APIRouter, Form, Response, Depends
 from twilio.twiml.messaging_response import MessagingResponse
 from app.api.parser import parse_message
 from app.db.operations import (
-    log_set, 
-    get_or_create_daily_log, 
-    get_next_exercise_details, 
-    log_readiness, 
-    grade_and_summarize_session,
-    get_todays_exercises,
-    get_all_exercises # <-- Add this
+    log_set, get_or_create_daily_log, get_next_exercise_details, 
+    log_readiness, grade_and_summarize_session, get_todays_exercises, get_all_exercises
 )
 from app.core.logging_config import log
 from app.api.ai_coach import get_ai_response
@@ -17,13 +12,9 @@ from app.api.security import validate_twilio_request
 
 router = APIRouter()
 
-# --- NEW HELPER FUNCTION ---
 def create_smart_response(long_message: str) -> MessagingResponse:
-    """
-    Creates a TwiML response, splitting the message into chunks if it's too long.
-    """
+    """Creates a TwiML response, splitting the message into chunks if it's too long."""
     twiml_response = MessagingResponse()
-    # A safe character limit for a single WhatsApp message
     CHAR_LIMIT = 1500 
 
     if len(long_message) <= CHAR_LIMIT:
@@ -33,58 +24,27 @@ def create_smart_response(long_message: str) -> MessagingResponse:
     else:
         log.warning(f"Message is too long ({len(long_message)} chars). Splitting into chunks.")
         paragraphs = long_message.split('\n\n')
-        
         current_chunk = ""
         message_count = 0
-        for i, p in enumerate(paragraphs):
-            # If adding the next paragraph fits, add it
+        for p in paragraphs:
             if len(current_chunk) + len(p) + 2 <= CHAR_LIMIT:
                 current_chunk += p + "\n\n"
-            # If the paragraph itself is too long, we have to split it brute-force
-            elif len(p) > CHAR_LIMIT:
-                log.warning("Paragraph is too long, splitting mid-sentence.")
-                # Send whatever we had before
-                if current_chunk:
-                    twiml_response.message(current_chunk.strip())
-                    message_count += 1
-                # Split the huge paragraph into smaller chunks
-                words = p.split(' ')
-                small_chunk = ""
-                for word in words:
-                    if len(small_chunk) + len(word) + 1 > CHAR_LIMIT:
-                        twiml_response.message(small_chunk.strip())
-                        message_count += 1
-                        small_chunk = ""
-                    small_chunk += word + " "
-                if small_chunk:
-                    twiml_response.message(small_chunk.strip())
-                    message_count += 1
-                current_chunk = ""
-            # Otherwise, the paragraph doesn't fit, so send the current chunk and start a new one
             else:
                 if current_chunk:
                     twiml_response.message(current_chunk.strip())
                     message_count += 1
                 current_chunk = p + "\n\n"
-
-        # Send any remaining part of the last chunk
         if current_chunk:
             twiml_response.message(current_chunk.strip())
             message_count += 1
-            
         log.info(f"📤 OUTGOING (Multi-part): Sent {message_count} separate messages.")
-
     return twiml_response
 
-
-# --- UPDATE THE WEBHOOK FUNCTION SIGNATURE ---
 @router.post("/whatsapp", dependencies=[Depends(validate_twilio_request)])
 async def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
-    # The rest of the function body remains exactly the same.
-    # The validation will automatically run and fail before this code
-    # is ever reached if the signature is invalid.
     user_phone_number = From
-    message_body = Body
+    message_body = Body.strip()
+    log.info(f"➡️  INCOMING: From: {user_phone_number}, Body: '{message_body}'")
     
     await get_or_create_daily_log(user_id=user_phone_number)
     parsed_data = await parse_message(message_body)

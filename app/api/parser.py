@@ -9,92 +9,70 @@ LOG_PATTERN = re.compile(
     r"^(?P<exercise_name>.+?)\s+(?P<weight>\d+\.?\d*)\s+(?P<reps>\d+)(\s+rpe\s+(?P<rpe>\d+))?(\s+notes\s+(?P<notes>.+))?$",
     re.IGNORECASE,
 )
-
-# --- NEW: Regex for readiness commands ---
 SLEEP_PATTERN = re.compile(r"^/sleep\s+(\d+\.?\d*)$", re.IGNORECASE)
-STRESS_PATTERN = re.compile(r"^/stress\s+([1-9]|10)$", re.IGNORECASE) # Validates 1-10
+STRESS_PATTERN = re.compile(r"^/stress\s+([1-9]|10)$", re.IGNORECASE)
 SORENESS_PATTERN = re.compile(r"^/soreness\s+(.+)$", re.IGNORECASE)
-
 
 async def parse_message(message: str) -> Dict[str, Any] | None:
     message = message.strip()
-    log.info(f"\U0001F9E0 PARSING: Received message for parsing: '{message}'")
+    log.info(f"🧠 PARSING: Interpreting message: '{message}'")
 
-    # --- Check for Commands First ---
-    # --- REPLACE THE `/list` BLOCK WITH THIS ---
     if message.lower() == "/list all":
-        log.info("✅ SUCCESS: Parsed command 'list_all_exercises'.")
+        log.info("✅ 🧠 PARSED: Command 'list_all_exercises'.")
         return {"command": "list_all_exercises"}
     if message.lower() == "/list":
-        log.info("✅ SUCCESS: Parsed command 'list_todays_exercises'.")
+        log.info("✅ 🧠 PARSED: Command 'list_todays_exercises'.")
         return {"command": "list_todays_exercises"}
-    # --- END OF REPLACEMENT ---
-        
     if message.lower() == "/help":
-        log.info("✅ SUCCESS: Parsed command 'help'.")
+        log.info("✅ 🧠 PARSED: Command 'get_help'.")
         return {"command": "get_help"}
-
     if message.lower().startswith("/ping"):
-        log.info("✅ SUCCESS: Parsed command 'ping'.")
+        log.info("✅ 🧠 PARSED: Command 'ping'.")
         return {"command": "ping"}
-        
     if message.lower().startswith("/ask"):
         question = message[5:].strip()
         if not question:
+            log.error("❌ 🧠 PARSING FAILED: Empty question after /ask command.")
             return {"error": "empty_question"}
-        log.info(f"✅ SUCCESS: Parsed command 'ask_ai' with question: '{question}'.")
+        log.info(f"✅ 🧠 PARSED: Command 'ask_ai' with question: '{question}'.")
         return {"command": "ask_ai", "question": question}
-
-    # --- NEW: Check for workout state commands ---
     if message.lower() in ["/start workout", "/start"]:
-        log.info("✅ SUCCESS: Parsed command 'start_workout'.")
+        log.info("✅ 🧠 PARSED: Command 'start_workout'.")
         return {"command": "start_workout"}
-
     if message.lower() in ["/end workout", "/done", "/end"]:
-        log.info("✅ SUCCESS: Parsed command 'end_workout'.")
+        log.info("✅ 🧠 PARSED: Command 'end_workout'.")
         return {"command": "end_workout"}
-
-    # --- NEW: Check for readiness commands ---
     sleep_match = SLEEP_PATTERN.match(message)
     if sleep_match:
         sleep_hours = float(sleep_match.group(1))
-        log.info(f"✅ SUCCESS: Parsed readiness command 'sleep' with value: {sleep_hours}.")
+        log.info(f"✅ 🧠 PARSED: Readiness command 'sleep' with value: {sleep_hours}.")
         return {"command": "log_readiness", "metric": "sleep_hours", "value": sleep_hours}
-        
     stress_match = STRESS_PATTERN.match(message)
     if stress_match:
         stress_level = int(stress_match.group(1))
-        log.info(f"✅ SUCCESS: Parsed readiness command 'stress' with value: {stress_level}.")
+        log.info(f"✅ 🧠 PARSED: Readiness command 'stress' with value: {stress_level}.")
         return {"command": "log_readiness", "metric": "stress_level", "value": stress_level}
-
     soreness_match = SORENESS_PATTERN.match(message)
     if soreness_match:
         sore_area = soreness_match.group(1).strip()
-        log.info(f"✅ SUCCESS: Parsed readiness command 'soreness' with value: '{sore_area}'.")
+        log.info(f"✅ 🧠 PARSED: Readiness command 'soreness' with value: '{sore_area}'.")
         return {"command": "log_readiness", "metric": "soreness", "value": sore_area}
-    
     if message.lower() in ["next", "what's next?", "next exercise"]:
-        log.info("✅ SUCCESS: Parsed command 'get_next_exercise'.")
+        log.info("✅ 🧠 PARSED: Command 'get_next_exercise'.")
         return {"command": "get_next_exercise"}
-        
     if message.lower() in ["done", "end workout"]:
-        log.info("✅ SUCCESS: Parsed command 'end_workout'.")
+        log.info("✅ 🧠 PARSED: Command 'end_workout'.")
         return {"command": "end_workout"}
-
-    # --- Fallback to workout log parsing ---
     match = LOG_PATTERN.match(message)
     if not match:
-        log.warning("Message does not match any command or log pattern.")
+        log.warning(f"🧠 PARSING: Message does not match any known command or log pattern.")
         return None
-
     data = match.groupdict()
     exercise_query = data["exercise_name"].strip()
-
     exercise_definition = await find_exercise_in_plan(exercise_query)
     if not exercise_definition:
-        log.error(f"❌ ERROR: Exercise not found in plan for query '{exercise_query}'.")
+        log.error(f"❌ 🧠 PARSING FAILED: Exercise not found for query '{exercise_query}'.")
         return {"error": "exercise_not_found", "query": exercise_query}
-
     try:
         set_log = SetLog(
             weight=float(data["weight"]),
@@ -102,7 +80,7 @@ async def parse_message(message: str) -> Dict[str, Any] | None:
             rpe=int(data["rpe"]) if data["rpe"] else None,
             notes=data["notes"].strip() if data["notes"] else None,
         )
-        log.info(f"✅ SUCCESS: Parsed set log for '{exercise_definition['name']}'.")
+        log.info(f"✅ 🧠 PARSED: Log set for '{exercise_definition['name']}'.")
         return {
             "command": "log_set",
             "exercise_name": exercise_definition["name"],
@@ -111,5 +89,5 @@ async def parse_message(message: str) -> Dict[str, Any] | None:
             "target_sets": exercise_definition["target_sets"],
         }
     except (ValueError, TypeError) as e:
-        log.error(f"❌ ERROR: Invalid data format for set log. Details: {e}")
+        log.error(f"❌ 🧠 PARSING FAILED: Invalid data format for set log. Details: {e}")
         return {"error": "invalid_data_format"}
