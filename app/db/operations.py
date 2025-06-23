@@ -66,8 +66,9 @@ async def log_set(
 ):
     db = get_db()
     today_str = date.today().strftime("%Y-%m-%d")
-    log.info(f"💾 DATABASE: Logging set for '{exercise_name}' for user '{user_id}'.")
+    log.info(f"\U0001F4BE DATABASE: Logging set for '{exercise_name}' for user '{user_id}'.")
 
+    # --- Section 1: Create session if it doesn't exist ---
     update_result = await db.daily_logs.update_one(
         {"user_id": user_id, "date": today_str, "workout_session": None},
         {"$set": {"workout_session": WorkoutSession().model_dump()}},
@@ -75,6 +76,7 @@ async def log_set(
     if update_result.modified_count > 0:
         log.info("New workout session created for the day.")
 
+    # --- Section 2: Check if this is the first set for this exercise today ---
     daily_log = await db.daily_logs.find_one(
         {
             "user_id": user_id,
@@ -83,7 +85,9 @@ async def log_set(
         }
     )
 
+    # --- Section 3: Add the set to the database ---
     if daily_log:
+        # Append set to existing exercise entry for today
         log.info(f"Appending set to existing exercise '{exercise_name}'.")
         await db.daily_logs.update_one(
             {
@@ -98,6 +102,7 @@ async def log_set(
             },
         )
     else:
+        # First set for this exercise today, create a new entry in the list
         log.info(f"First set for new exercise '{exercise_name}'. Creating entry.")
         completed_exercise = CompletedExercise(
             exercise_id=PyObjectId(str(exercise_id)), name=exercise_name, sets=[set_log]
@@ -111,14 +116,39 @@ async def log_set(
             },
         )
 
-    updated_log = await get_or_create_daily_log(user_id)
-    if updated_log.workout_session and updated_log.workout_session.completed_exercises:
+    # --- NEW: Section 4: Check for and flag new Personal Records ---
+    # Find the all-time max weight for this exercise, EXCLUDING today's log
+    pipeline = [
+        {"$match": {"user_id": user_id, "date": {"$ne": today_str}}},
+        {"$unwind": "$workout_session.completed_exercises"},
+        {"$match": {"workout_session.completed_exercises.exercise_id": PyObjectId(str(exercise_id))}},
+        {"$unwind": "$workout_session.completed_exercises.sets"},
+        {"$group": {"_id": None, "max_weight": {"$max": "$workout_session.completed_exercises.sets.weight"}}}
+    ]
+    pr_cursor = db.daily_logs.aggregate(pipeline)
+    pr_result = await pr_cursor.to_list(length=1)
+    
+    previous_pr = pr_result[0]['max_weight'] if pr_result else 0
+    log.info(f"Checking PR for {exercise_name}. Current set: {set_log.weight}. Previous PR: {previous_pr}")
+
+    if set_log.weight > previous_pr:
+        log.info(f"\U0001F3C6 NEW PERSONAL RECORD ACHIEVED FOR {exercise_name}! Previous: {previous_pr}, New: {set_log.weight}")
+        # Update the flag for this exercise in today's session
+        await db.daily_logs.update_one(
+            {"user_id": user_id, "date": today_str, "workout_session.completed_exercises.name": exercise_name},
+            {"$set": {"workout_session.completed_exercises.$.personal_record_achieved": True}}
+        )
+
+    # --- Section 5: Return the number of sets completed today ---
+    updated_log_data = await db.daily_logs.find_one({"user_id": user_id, "date": today_str})
+    if not updated_log_data or not isinstance(updated_log_data, dict):
+        return 0
+    updated_log = DailyLog(**updated_log_data)
+    if updated_log.workout_session:
         for ex in updated_log.workout_session.completed_exercises:
             if ex.name == exercise_name:
                 num_sets = len(ex.sets)
-                log.info(
-                    f"✅ SUCCESS: Set logged. Total sets for '{exercise_name}' today: {num_sets}."
-                )
+                log.info(f"✅ SUCCESS: Set logged. Total sets for '{exercise_name}' today: {num_sets}.")
                 return num_sets
     return 0
 
