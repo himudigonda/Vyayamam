@@ -28,34 +28,38 @@ async def get_or_create_daily_log(user_id: str) -> DailyLog:
         return new_log
 
 
-# --- REPLACE THE `find_exercise_in_plan` FUNCTION WITH THIS NEW VERSION ---
+# --- REPLACE the existing `find_exercise_in_plan` function with this new, more flexible version ---
 async def find_exercise_in_plan(exercise_query: str) -> Dict[str, Any] | None:
     """
-    Finds the best matching exercise from the plan using fuzzy string matching.
+    Finds the best matching exercise from ALL plans using fuzzy string matching,
+    making the logger flexible for any day.
     """
     db = get_db()
-    today_weekday = date.today().weekday() + 1
-    log.info(f"🧠 FUZZY SEARCH: Searching for exercise matching '{exercise_query}' for today (weekday {today_weekday}).")
+    log.info(f"🧠 FUZZY SEARCH: Searching for exercise matching '{exercise_query}' across ALL plans.")
     
-    plan = await db.workout_definitions.find_one({"day_of_week": today_weekday})
+    # --- THE FIX: Instead of finding one plan, find ALL plans ---
+    plans_cursor = db.workout_definitions.find({})
+    all_plans = await plans_cursor.to_list(length=10) # 10 is plenty for our 7-day plans
     
-    if not plan or not plan.get("exercises"):
-        log.warning(f"No workout plan found for today, so no exercises to match against.")
+    if not all_plans:
+        log.warning(f"No workout definitions found in the database at all.")
         return None
 
-    # Create a list of all possible names and aliases to search against
+    # Create a list of all possible names and aliases from every plan
     choices = {}
-    for exercise in plan["exercises"]:
-        # The official name is a choice
-        choices[exercise["name"]] = exercise
-        # All aliases are also choices
-        for alias in exercise.get("aliases", []):
-            choices[alias] = exercise
-            
-    # Use process.extractOne to find the best match
+    for plan in all_plans:
+        for exercise in plan.get("exercises", []):
+            # The official name is a choice
+            choices[exercise["name"]] = exercise
+            # All aliases are also choices
+            for alias in exercise.get("aliases", []):
+                choices[alias] = exercise
+                
+    # Use process.extractOne to find the best match from the master list
     best_match = process.extractOne(exercise_query, choices.keys())
     
-    if best_match and best_match[1] >= 80:  # Using a confidence score of 80
+    # We can be slightly more confident now that we're searching everything.
+    if best_match and best_match[1] >= 85:
         found_string = best_match[0]
         score = best_match[1]
         matched_exercise = choices[found_string]
