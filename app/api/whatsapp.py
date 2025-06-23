@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Form, Response
 from twilio.twiml.messaging_response import MessagingResponse
 from app.api.parser import parse_message
-from app.db.operations import log_set, get_or_create_daily_log, get_next_exercise_details
+from app.db.operations import log_set, get_or_create_daily_log, get_next_exercise_details, log_readiness
 from app.core.logging_config import log
 from app.api.ai_coach import get_ai_response
 
@@ -79,7 +79,8 @@ async def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
     response_message = ""
 
     if not parsed_data:
-        response_message = "Sorry, I didn't understand that. Please use the format:\n'exercise weight reps [rpe #] [notes ...]'\nOr a command like 'next'."
+        # --- NEW: Add new commands to the help message ---
+        response_message = "Sorry, I didn't understand that. Please use one of the formats:\n\n*Log a set:*\n`exercise weight reps`\n\n*Commands:*\n`next`\n`/ask [question]`\n`/sleep [hours]`\n`/stress [1-10]`\n`/soreness [area]`"
     elif "error" in parsed_data:
         if parsed_data["error"] == "exercise_not_found":
             response_message = f"❌ Could not find an exercise matching '{parsed_data['query']}'. Please check the name and try again."
@@ -87,6 +88,23 @@ async def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
             response_message = "🤖 Please ask a question after the /ask command. For example:\n`/ask how is my chest progressing?`"
         else:
             response_message = "❌ There was an error in the format of your log. Please check the weight/reps/rpe."
+    
+    # --- ADD THIS NEW LOGIC BLOCK ---
+    elif parsed_data["command"] == "log_readiness":
+        metric = parsed_data["metric"]
+        value = parsed_data["value"]
+        
+        await log_readiness(user_id=user_phone_number, metric=metric, value=value)
+        
+        # Create a user-friendly response
+        if metric == "sleep_hours":
+            response_message = f"✅ Sleep logged: {value} hours. Sweet dreams! 😴"
+        elif metric == "stress_level":
+            response_message = f"✅ Stress level logged as {value}/10. Remember to take it easy if you need to. 🙏"
+        elif metric == "soreness":
+            response_message = f"✅ Soreness in '{value}' logged. Make sure to stretch and recover! 💪"
+    # --- END OF NEW BLOCK ---
+
     elif parsed_data["command"] == "log_set":
         num_sets_done = await log_set(user_id=user_phone_number, exercise_name=parsed_data["exercise_name"], exercise_id=parsed_data["exercise_id"], set_log=parsed_data["set_log"])
         target_sets = parsed_data["target_sets"]

@@ -4,6 +4,7 @@ from datetime import date, timedelta
 from app.db.database import get_db
 from app.core.models import DailyLog, SetLog, WorkoutSession, CompletedExercise, PyObjectId
 from app.core.logging_config import log
+from typing import Any 
 
 
 async def get_or_create_daily_log(user_id: str) -> DailyLog:
@@ -240,3 +241,34 @@ async def get_recent_workouts_summary(user_id: str, limit: int = 5) -> list:
     recent_logs = await db.daily_logs.aggregate(pipeline).to_list(length=limit)
     log.info(f"✅ SUCCESS: Found {len(recent_logs)} recent workout logs.")
     return recent_logs
+
+
+async def log_readiness(user_id: str, metric: str, value: Any):
+    """
+    Logs a subjective readiness metric (sleep, stress, or soreness) for the user.
+    """
+    db = get_db()
+    today_str = date.today().strftime("%Y-%m-%d")
+    log.info(f"\U0001F4BE DATABASE: Logging readiness metric '{metric}' with value '{value}' for user '{user_id}'.")
+    
+    # Ensure the daily log exists
+    await get_or_create_daily_log(user_id)
+    
+    update_doc = {}
+    # Soreness is a list, so we push to it. Others are simple sets.
+    if metric == "soreness":
+        update_doc["$push"] = {"readiness.soreness": value}
+    else:
+        # e.g., "readiness.sleep_hours" or "readiness.stress_level"
+        update_doc["$set"] = {f"readiness.{metric}": value}
+
+    result = await db.daily_logs.update_one(
+        {"user_id": user_id, "date": today_str},
+        update_doc,
+        upsert=False # We don't upsert because get_or_create handles creation
+    )
+    
+    if result.modified_count > 0:
+        log.info("✅ SUCCESS: Readiness data updated in the daily log.")
+    else:
+        log.warning("Could not update readiness data. The daily log might not exist or the value is the same.")
