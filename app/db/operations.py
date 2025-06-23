@@ -318,3 +318,74 @@ async def update_workout_status(user_id: str, status: str) -> dict:
             return {"status": "success", "message": "Workout was already marked as complete."}
 
     return {"status": "error", "message": "Invalid status update."}
+
+# --- MODIFY THIS FUNCTION ---
+async def grade_and_summarize_session(user_id: str) -> dict:
+    """
+    Grades the workout, gets an AI summary, and finalizes the session in the DB.
+    """
+    # --- ADD THE IMPORT HERE, INSIDE THE FUNCTION ---
+    from app.api.ai_coach import get_ai_session_summary
+
+    db = get_db()
+    today_str = date.today().strftime("%Y-%m-%d")
+    log.info(f"\U0001F4CA GRADING: Starting session analysis for user '{user_id}'.")
+
+    # 1. Fetch data
+    daily_log_data = await db.daily_logs.find_one({"user_id": user_id, "date": today_str})
+    if not daily_log_data or not daily_log_data.get("workout_session"):
+        return {"status": "error", "message": "No workout in progress to grade."}
+    
+    daily_log = DailyLog(**daily_log_data)
+    session = daily_log.workout_session
+    if not session or not getattr(session, 'completed_exercises', None):
+        return {"status": "error", "message": "No completed exercises to grade."}
+
+    today_weekday = datetime.strptime(today_str, "%Y-%m-%d").weekday() + 1
+    plan = await db.workout_definitions.find_one({"day_of_week": today_weekday})
+
+    # 2. Grade the session
+    grade = "N/A"
+    if plan and plan.get("exercises"):
+        plan_exercises = {ex["name"] for ex in plan["exercises"]}
+        completed_exercises = {ex.name for ex in session.completed_exercises}
+        adherence = len(completed_exercises.intersection(plan_exercises)) / len(plan_exercises) if plan_exercises else 0
+        pr_count = sum(1 for ex in session.completed_exercises if hasattr(ex, 'personal_record_achieved') and ex.personal_record_achieved)
+
+        if adherence >= 0.9:
+            grade = "A" if pr_count == 0 else "A+"
+        elif adherence >= 0.7:
+            grade = "B"
+        elif adherence >= 0.5:
+            grade = "C"
+        elif adherence > 0:
+            grade = "D"
+        else:
+            grade = "F"
+        log.info(f"Calculated Grade: {grade} (Adherence: {adherence:.2f}, PRs: {pr_count})")
+    else:
+        log.warning("No workout plan for today. Cannot calculate a grade.")
+
+    # 3. Get AI summary
+    if hasattr(session, 'model_dump'):
+        session_dict_for_ai = session.model_dump(exclude={"status", "start_time", "end_time"})
+    else:
+        # fallback: convert to dict, remove keys if present
+        session_dict_for_ai = dict(session)
+        for k in ["status", "start_time", "end_time"]:
+            session_dict_for_ai.pop(k, None)
+    ai_summary = await get_ai_session_summary(session_dict_for_ai)
+
+    # 4. Update database
+    update_op = {
+        "$set": {
+            "workout_session.status": "completed",
+            "workout_session.end_time": datetime.utcnow(),
+            "workout_session.session_grade": grade,
+            "workout_session.ai_summary": ai_summary,
+        }
+    }
+    await db.daily_logs.update_one({"_id": daily_log.id}, update_op)
+    log.info("\u2705 SUCCESS: Session finalized in DB with grade and AI summary.")
+
+    return {"status": "success", "grade": grade, "summary": ai_summary}

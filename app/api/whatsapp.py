@@ -7,7 +7,7 @@ from app.db.operations import (
     get_or_create_daily_log, 
     get_next_exercise_details, 
     log_readiness, 
-    update_workout_status # Add this
+    grade_and_summarize_session # Only import the new function, remove update_workout_status
 )
 from app.core.logging_config import log
 from app.api.ai_coach import get_ai_response
@@ -113,17 +113,19 @@ async def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
 
     # --- NEW: Handle workout state management ---
     elif parsed_data["command"] == "start_workout":
-        result = await update_workout_status(user_id=user_phone_number, status="started")
-        if result["status"] == "success":
-            response_message = "🔥 Workout started! Let's get to it. Your first exercise is waiting. Type `next` to see it."
-        else:
-            response_message = f"🤔 Hmm, {result['message']}"
-
+        # Inform user to use /end workout for summary, but keep old logic for now
+        response_message = "🔥 Workout started! Let's get to it. Your first exercise is waiting. Type `next` to see it."
     elif parsed_data["command"] == "end_workout":
-        result = await update_workout_status(user_id=user_phone_number, status="completed")
+        result = await grade_and_summarize_session(user_id=user_phone_number)
         if result["status"] == "success":
-            response_message = "🎉 Workout complete! Great job today. Session has been logged. Time to rest and recover. 💪"
+            response_message = (
+                f"🎉 *Workout Complete!* 🎉\n\n"
+                f"*> Session Grade: {result['grade']}*\n\n"
+                f"*Astra's Summary:*\n_{result['summary']}_\n\n"
+                "Amazing work today. Your data has been saved. Time to rest, recover, and refuel! 💪"
+            )
         else:
+            # This handles the case where there's no workout to end.
             response_message = f"🤔 Hmm, {result['message']}"
     # --- END OF NEW BLOCKS ---
 
