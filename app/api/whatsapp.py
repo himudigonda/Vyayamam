@@ -1,5 +1,5 @@
 # app/api/whatsapp.py
-from fastapi import APIRouter, Form, Response
+from fastapi import APIRouter, Form, Response, Depends
 from twilio.twiml.messaging_response import MessagingResponse
 from app.api.parser import parse_message
 from app.db.operations import (
@@ -13,6 +13,7 @@ from app.db.operations import (
 )
 from app.core.logging_config import log
 from app.api.ai_coach import get_ai_response
+from app.api.security import validate_twilio_request
 
 router = APIRouter()
 
@@ -76,8 +77,12 @@ def create_smart_response(long_message: str) -> MessagingResponse:
     return twiml_response
 
 
-@router.post("/whatsapp")
+# --- UPDATE THE WEBHOOK FUNCTION SIGNATURE ---
+@router.post("/whatsapp", dependencies=[Depends(validate_twilio_request)])
 async def whatsapp_webhook(From: str = Form(...), Body: str = Form(...)):
+    # The rest of the function body remains exactly the same.
+    # The validation will automatically run and fail before this code
+    # is ever reached if the signature is invalid.
     user_phone_number = From
     message_body = Body
     
