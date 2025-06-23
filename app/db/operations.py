@@ -209,3 +209,34 @@ async def get_next_exercise_details(user_id: str) -> dict | None:
             "target_weight": target_weight
         }
     }
+
+
+# --- AI Coach Integration ---
+async def get_recent_workouts_summary(user_id: str, limit: int = 5) -> list:
+    """
+    Retrieves a summary of the most recent workout sessions for a user.
+    """
+    db = get_db()
+    log.info(f"💾 DATABASE: Fetching summary of last {limit} workouts for user '{user_id}'.")
+    
+    pipeline = [
+        {"$match": {"user_id": user_id, "workout_session": {"$ne": None}}},
+        {"$sort": {"date": -1}},
+        {"$limit": limit},
+        # Project only the necessary fields to keep the payload small
+        {
+            "$project": {
+                "_id": 0,
+                "date": 1,
+                "workout_session.status": 1,
+                "workout_session.completed_exercises.name": 1,
+                "workout_session.completed_exercises.sets.weight": 1,
+                "workout_session.completed_exercises.sets.reps": 1,
+                "workout_session.completed_exercises.sets.rpe": 1
+            }
+        }
+    ]
+    
+    recent_logs = await db.daily_logs.aggregate(pipeline).to_list(length=limit)
+    log.info(f"✅ SUCCESS: Found {len(recent_logs)} recent workout logs.")
+    return recent_logs
