@@ -46,7 +46,7 @@ async def parse_message(message: str) -> Dict[str, Any] | None:
         return {
             "command": "log_set",
             "exercise_name": exercise_definition["name"],
-            "exercise_id": exercise_definition["_id"],
+            "exercise_id": exercise_definition["exercise_id"],
             "set_log": set_log,
             "target_sets": exercise_definition["target_sets"],
         }
